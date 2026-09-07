@@ -1,0 +1,16 @@
+{
+  "bot_token": "123456:ABC-DEF_thay_bang_token_that_tu_BotFather",
+  "allowed_user_ids": [111111111],
+
+  "shell": "/bin/bash",
+  "start_dir": "",
+
+  "command_timeout_seconds": 0,
+
+  "claude_enabled": true,
+  "claude_bin": "claude",
+  "claude_args": [],
+
+  "claude_permission_mode": "manual",
+  "claude_ask_timeout_seconds": 300
+}

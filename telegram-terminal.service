@@ -1,0 +1,27 @@
+[Unit]
+Description=telegram-terminal (điều khiển máy qua Telegram bot)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+
+# Chạy dưới quyền user thật (KHÔNG nên chạy root nếu tránh được).
+# Claude Code sẽ đọc cấu hình/đăng nhập trong HOME của user này.
+User=REPLACE_USER
+Group=REPLACE_USER
+Environment=HOME=/home/REPLACE_USER
+# Đảm bảo tìm thấy `claude` và các lệnh khác:
+Environment=PATH=/home/REPLACE_USER/.local/bin:/home/REPLACE_USER/.npm-global/bin:/usr/local/bin:/usr/bin:/bin
+
+ExecStart=/usr/local/bin/telegram-terminal -config /etc/telegram-terminal/config.json
+
+Restart=always
+RestartSec=3
+
+# Chống bot bị dừng khi log quá nhiều:
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
