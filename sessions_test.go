@@ -111,32 +111,32 @@ func TestResolveSession(t *testing.T) {
 		{ID: "aaaaaaaa-2222-2222-2222-222222222222"},
 		{ID: "bbbbbbbb-3333-3333-3333-333333333333"},
 	}
-	if got, err := resolveSession(list, "3"); err != nil || got != list[2].ID {
+	if got, err := resolveSession(langEN, list, "3"); err != nil || got != list[2].ID {
 		t.Errorf("theo số: %q %v", got, err)
 	}
-	if got, err := resolveSession(list, "bbbbbbbb"); err != nil || got != list[2].ID {
+	if got, err := resolveSession(langEN, list, "bbbbbbbb"); err != nil || got != list[2].ID {
 		t.Errorf("theo prefix: %q %v", got, err)
 	}
-	if _, err := resolveSession(list, "aaaaaaaa"); err == nil {
+	if _, err := resolveSession(langEN, list, "aaaaaaaa"); err == nil {
 		t.Error("prefix trùng nhiều phiên phải báo lỗi")
 	}
-	if _, err := resolveSession(list, "9"); err == nil {
+	if _, err := resolveSession(langEN, list, "9"); err == nil {
 		t.Error("số ngoài danh sách phải báo lỗi")
 	}
-	if _, err := resolveSession(list, ""); err == nil {
+	if _, err := resolveSession(langEN, list, ""); err == nil {
 		t.Error("thiếu tham số phải báo lỗi")
 	}
 	// Id toàn chữ số không được hiểu thành số thứ tự.
 	digits := []sessionInfo{{ID: "33333333-3333-3333-3333-333333333333"}, {ID: "44444444-0000-0000-0000-000000000000"}}
-	if got, err := resolveSession(digits, "33333333"); err != nil || got != digits[0].ID {
+	if got, err := resolveSession(langEN, digits, "33333333"); err != nil || got != digits[0].ID {
 		t.Errorf("id toàn chữ số: %q %v", got, err)
 	}
-	if got, err := resolveSession(digits, "2"); err != nil || got != digits[1].ID {
+	if got, err := resolveSession(langEN, digits, "2"); err != nil || got != digits[1].ID {
 		t.Errorf("số thứ tự 1-2 chữ số vẫn phải là số thứ tự: %q %v", got, err)
 	}
 
 	// Id lạ nhưng đủ dài -> vẫn cho thử.
-	if got, err := resolveSession(list, "cccccccc-4444"); err != nil || got != "cccccccc-4444" {
+	if got, err := resolveSession(langEN, list, "cccccccc-4444"); err != nil || got != "cccccccc-4444" {
 		t.Errorf("id ngoài danh sách: %q %v", got, err)
 	}
 }
@@ -176,7 +176,7 @@ func TestSessionsVaResumeQuaTelegram(t *testing.T) {
 		t.Errorf("thiếu --resume đúng id, args = %q", got)
 	}
 	sent, _, _ = tg.all()
-	if !containsSub(sent, "Đã mở lại phiên") {
+	if !containsSub(sent, "Resumed session") {
 		t.Errorf("chưa báo mở lại phiên: %q", sent)
 	}
 
@@ -185,10 +185,10 @@ func TestSessionsVaResumeQuaTelegram(t *testing.T) {
 	b.handle(msgUpdate(t, "/sessions"))
 	sent, _, _ = tg.all()
 	last := sent[len(sent)-1]
-	if !strings.Contains(last, "▶️ đang mở") {
+	if !strings.Contains(last, "▶️ open") {
 		t.Errorf("/sessions chưa đánh dấu phiên đang mở:\n%s", last)
 	}
-	if strings.Contains(last, "quyền") || strings.Contains(last, "chế độ") {
+	if strings.Contains(last, "permissions") || strings.Contains(last, "mode:") {
 		t.Errorf("/sessions không nên lặp thông tin của /status:\n%s", last)
 	}
 
@@ -196,7 +196,7 @@ func TestSessionsVaResumeQuaTelegram(t *testing.T) {
 	b.handle(msgUpdate(t, "/status"))
 	sent, _, _ = tg.all()
 	st := sent[len(sent)-1]
-	for _, want := range []string{"chế độ:", "📁", "Phiên:", "quyền", "33333333"} {
+	for _, want := range []string{"mode:", "📁", "Session:", "permissions", "33333333"} {
 		if !strings.Contains(st, want) {
 			t.Errorf("/status thiếu %q:\n%s", want, st)
 		}
@@ -208,7 +208,7 @@ func TestSessionsVaResumeQuaTelegram(t *testing.T) {
 	sess.mu.Unlock()
 	b.handle(msgUpdate(t, "/status"))
 	sent, _, _ = tg.all()
-	if !strings.Contains(sent[len(sent)-1], "/newchat để mở lại") {
+	if !strings.Contains(sent[len(sent)-1], "/session new to reopen") {
 		t.Errorf("/status chưa cảnh báo lệch thư mục:\n%s", sent[len(sent)-1])
 	}
 }
@@ -218,8 +218,8 @@ func TestStatusTextChuaCoPhien(t *testing.T) {
 	tg := newTGMock()
 	defer tg.srv.Close()
 	b := tg.bot(Config{ClaudeEnabled: true, StartDir: "/home/user", ClaudePermissionMode: "acceptEdits"})
-	got := b.statusText(b.session(1))
-	for _, want := range []string{"chế độ: <b>shell</b>", "/home/user", "chưa mở", "acceptEdits"} {
+	got := b.statusText(1, b.session(1))
+	for _, want := range []string{"mode: <b>shell</b>", "/home/user", "none open", "acceptEdits"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("/status thiếu %q:\n%s", want, got)
 		}
@@ -227,7 +227,7 @@ func TestStatusTextChuaCoPhien(t *testing.T) {
 
 	// Claude tắt trong config -> nói thẳng, không bàn tới quyền.
 	b2 := tg.bot(Config{StartDir: "/home/user"})
-	if got := b2.statusText(b2.session(2)); !strings.Contains(got, "chưa bật trong cấu hình") {
+	if got := b2.statusText(2, b2.session(2)); !strings.Contains(got, "not enabled in the config") {
 		t.Errorf("thiếu thông báo Claude chưa bật:\n%s", got)
 	}
 }

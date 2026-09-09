@@ -2,6 +2,10 @@
 
 > 🇬🇧 English version (bản chính): **[README.md](README.md)**. Bản tiếng Việt này
 > được giữ đồng bộ với bản tiếng Anh.
+>
+> ⚠️ **Bot mặc định nói tiếng Anh.** Gõ `/lang vi` để đổi sang tiếng Việt cho
+> chat đó, hoặc đặt `"language": "vi"` trong config để mọi chat đều tiếng Việt.
+> Mọi ví dụ dưới đây là giao diện tiếng Việt. Log của bot luôn là tiếng Anh.
 
 Biến một bot Telegram thành "terminal" cho máy Ubuntu của bạn:
 
@@ -29,6 +33,7 @@ máy nào cũng chạy, không cần cài runtime.
   - [Chế độ Claude](#chế-độ-claude)
   - [Gửi ảnh & file](#gửi-ảnh--file)
   - [Quyền: `/perm`](#quyền-perm)
+  - [Ngôn ngữ: `/lang`](#ngôn-ngữ-lang)
   - [Phiên: `/session`](#phiên-session)
   - [`/status`](#status--đọc-trạng-thái)
   - [Bảng lệnh đầy đủ](#bảng-lệnh-đầy-đủ)
@@ -105,7 +110,7 @@ journalctl -u telegram-terminal -f
 Log khởi động phải như thế này:
 
 ```text
-telegram-terminal khởi động trên host "server-01" — 1 user được phép, claude=true
+telegram-terminal started on host "server-01" — 1 allowed user(s), claude=true, lang=en, attachments in /tmp/telegram-terminal
 ```
 
 ## 5. Kiểm tra hoạt động
@@ -114,7 +119,7 @@ Trong Telegram, nhắn cho bot:
 
 | Gõ | Mong đợi |
 |----|----------|
-| `/help` | Bảng lệnh, có dòng `Claude: ✅ đã bật` |
+| `/help` | Bảng lệnh, có dòng `Claude: ✅ enabled` (hoặc `✅ đã bật` nếu đã `/lang vi`) |
 | `whoami` | Tên user đang chạy bot |
 | `/status` | Hostname, chế độ, thư mục, trạng thái phiên Claude |
 | `/c chào bạn` | Chữ chảy dần về trong một tin nhắn |
@@ -156,12 +161,13 @@ File `/etc/telegram-terminal/config.json`:
 | `image_dir` | Nơi lưu ảnh/file gửi từ Telegram | `<temp>/telegram-terminal` |
 | `image_max_bytes` | Ảnh nhỏ hơn mức này được **nhúng thẳng** vào lượt Claude; lớn hơn thì chỉ đưa đường dẫn | `3670016` (3,5 MB) |
 | `image_keep_hours` | Dọn file đính kèm cũ hơn mức này lúc khởi động; số âm = giữ mãi | `24` |
-| `image_default_prompt` | Prompt dùng khi gửi ảnh mà không có caption | `Xem file đính kèm.` |
+| `image_default_prompt` | Prompt dùng khi gửi ảnh mà không có caption | theo ngôn ngữ của chat (`Xem file đính kèm.`) |
+| `language` | Ngôn ngữ mặc định cho mọi chat: `en` hoặc `vi`. Mỗi chat đổi riêng bằng `/lang` | `en` |
 
 Biến môi trường ghi đè config (tiện cho systemd / secret manager):
 `TT_BOT_TOKEN`, `TT_ALLOWED_USER_IDS` (phân tách bằng dấu phẩy), `TT_SHELL`,
 `TT_START_DIR`, `TT_CLAUDE_BIN`, `TT_CLAUDE_ENABLED=1`,
-`TT_CLAUDE_PERMISSION_MODE`, `TT_IMAGE_DIR`, `TT_IMAGE_MAX_BYTES`.
+`TT_CLAUDE_PERMISSION_MODE`, `TT_IMAGE_DIR`, `TT_IMAGE_MAX_BYTES`, `TT_LANG`.
 
 > `image_max_bytes` mặc định 3,5 MB vì base64 làm dữ liệu nở 4/3 lần, còn API
 > Claude chỉ nhận ảnh tối đa 5 MB sau khi mã hóa.
@@ -386,6 +392,31 @@ Hai điểm dễ vướng:
 - `/reset` đưa chế độ quyền về giá trị trong config — quyền rộng bạn vừa đặt
   không sống sót qua `/reset`.
 
+## Ngôn ngữ: `/lang`
+
+`/lang` không tham số hiện danh sách kèm nút bấm; `/lang vi` đổi luôn. Lựa chọn
+tính **theo từng chat** và **sống qua `/reset`** — đó là sở thích của bạn, không
+phải trạng thái phiên.
+
+```text
+/lang
+
+🌐 Ngôn ngữ: <b>Tiếng Việt</b>
+
+• <code>en</code> — English
+✅ <code>vi</code> — Tiếng Việt
+
+Bấm nút hoặc gõ /lang <mã>.
+
+[English]  [✅ Tiếng Việt]
+```
+
+- `language` trong config là mặc định cho chat chưa từng gõ `/lang`.
+- **Log của bot luôn là tiếng Anh** bất kể chat chọn gì, để một máy chỉ có một
+  dạng log.
+- Thêm ngôn ngữ = thêm một map trong `i18n.go`; test `TestLangCatalogParity` sẽ
+  fail nếu thiếu key hoặc `%s`/`%d` không khớp với bản tiếng Anh.
+
 ## Phiên: `/session`
 
 Claude Code lưu mỗi phiên thành một file
@@ -458,6 +489,7 @@ Nếu chưa mở phiên nào: `🤖 Phiên: chưa mở · quyền manual sẽ á
 | `/session <số\|id>` | Mở lại một phiên trong danh sách |
 | `/session new` | Đóng phiên hiện tại, mở phiên mới ở thư mục hiện tại |
 | `/perm [chế độ]` | Đổi quyền (có nút bấm) |
+| `/lang [mã]` | Đổi ngôn ngữ giao diện: `en`, `vi` (có nút bấm) |
 | `/status` | Xem chế độ, thư mục, phiên Claude & quyền |
 | `/reset` | Về thư mục mặc định, chế độ shell, quyền theo config & đóng phiên (không xóa gì trên đĩa) |
 | `/help` | Trợ giúp |
@@ -466,7 +498,7 @@ Tên gọi khác, giữ cho quen tay:
 
 ```text
 /shell = /sh          /claude = /c          /stop = /cancel
-/permission = /perm   /mode, /st, /pwd = /status
+/permission = /perm   /language = /lang   /mode, /st, /pwd = /status
 /sessions, /ss, /newchat, /resume, /r = /session
 ```
 
@@ -561,9 +593,10 @@ journalctl -u telegram-terminal --since "1h ago" --no-pager
 Bot ghi log mỗi lần mở/resume phiên và mỗi lần bấm nút quyền:
 
 ```text
-claude: phiên mới cho chat 111111111 (cwd=/home/user)
-claude: mở lại phiên e5f6a7b8-… cho chat 111111111 (cwd=/home/user)
+claude: new session for chat 111111111 (cwd=/home/user)
+claude: resumed session e5f6a7b8-… for chat 111111111 (cwd=/home/user)
 quyền: chat 111111111, user 111111111 -> allow (always=true)
+language: chat 111111111 -> vi
 ```
 
 ---
@@ -603,7 +636,8 @@ Vài chi tiết đáng lưu:
 - Trên dây, chế độ mặc định tên là `default`, còn cờ CLI gọi là `manual` — bot
   quy đổi hai chiều.
 - Các file: `main.go` (Telegram + shell), `claude.go` (phiên Claude, quyền),
-  `sessions.go` (liệt kê/resume phiên), `media.go` (tải ảnh/file, gom album).
+  `sessions.go` (liệt kê/resume phiên), `media.go` (tải ảnh/file, gom album),
+  `i18n.go` (chuỗi giao diện theo ngôn ngữ).
 
 # Chạy test
 

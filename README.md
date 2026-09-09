@@ -19,10 +19,10 @@ binary**, copy it to any machine, no runtime to install.
 > bot can run arbitrary commands as the user the bot runs as. Guard the bot token
 > like a password and ALWAYS set `allowed_user_ids`.
 
-> **Note on language:** the bot's own replies and `/help` are in **Vietnamese**.
-> This document explains everything in English and quotes the Vietnamese strings
-> verbatim where you will actually see them (e.g. in the troubleshooting table),
-> so you can match them up.
+> **Note on language:** the bot talks **English by default**. Send `/lang vi`
+> for Vietnamese (per chat), or set `"language": "vi"` in the config to make it
+> the default for every chat. The bot's own log stays English regardless, so one
+> machine only ever produces one kind of log.
 
 **Contents**
 
@@ -34,6 +34,7 @@ binary**, copy it to any machine, no runtime to install.
   - [Claude mode](#claude-mode)
   - [Sending photos & files](#sending-photos--files)
   - [Permissions: `/perm`](#permissions-perm)
+  - [Language: `/lang`](#language-lang)
   - [Sessions: `/session`](#sessions-session)
   - [`/status`](#status--reading-the-state)
   - [Full command list](#full-command-list)
@@ -111,7 +112,7 @@ journalctl -u telegram-terminal -f
 A healthy startup log looks like this:
 
 ```text
-telegram-terminal khởi động trên host "server-01" — 1 user được phép, claude=true
+telegram-terminal started on host "server-01" — 1 allowed user(s), claude=true, lang=en, attachments in /tmp/telegram-terminal
 ```
 
 ## 5. Smoke test
@@ -120,7 +121,7 @@ In Telegram, message the bot:
 
 | Send | Expect |
 |------|--------|
-| `/help` | The command list, including `Claude: ✅ đã bật` (enabled) |
+| `/help` | The command list, including `Claude: ✅ enabled` |
 | `whoami` | The user the bot runs as |
 | `/status` | Hostname, current mode, directory, Claude session state |
 | `/c hello` | Text streaming into a single message |
@@ -161,12 +162,13 @@ File: `/etc/telegram-terminal/config.json`
 | `image_dir` | Where photos/files from Telegram are stored | `<temp>/telegram-terminal` |
 | `image_max_bytes` | Images smaller than this are **embedded directly** into the Claude turn; larger ones only get a file path | `3670016` (3.5 MB) |
 | `image_keep_hours` | Delete stored attachments older than this at startup; negative = keep forever | `24` |
-| `image_default_prompt` | Prompt used when a photo arrives without a caption | `Xem file đính kèm.` |
+| `image_default_prompt` | Prompt used when a photo arrives without a caption | the localised default (`Take a look at the attached file.`) |
+| `language` | Default interface language for every chat: `en` or `vi`. Each chat can override it with `/lang` | `en` |
 
 Environment variables override the config file (handy for systemd / secret
 managers): `TT_BOT_TOKEN`, `TT_ALLOWED_USER_IDS` (comma-separated), `TT_SHELL`,
 `TT_START_DIR`, `TT_CLAUDE_BIN`, `TT_CLAUDE_ENABLED=1`,
-`TT_CLAUDE_PERMISSION_MODE`, `TT_IMAGE_DIR`, `TT_IMAGE_MAX_BYTES`.
+`TT_CLAUDE_PERMISSION_MODE`, `TT_IMAGE_DIR`, `TT_IMAGE_MAX_BYTES`, `TT_LANG`.
 
 > `image_max_bytes` defaults to 3.5 MB because base64 inflates data by 4/3 and
 > the Claude API caps images at 5 MB *after* encoding.
@@ -214,8 +216,7 @@ You can also cross over without switching: `/sh <command>` runs a shell command
 while in Claude mode, and `/c <prompt>` asks Claude while in shell mode.
 
 Each chat runs **one thing at a time**. Sending something while busy gets you
-`⏳ Đang bận chạy lệnh khác. Gõ /cancel để hủy.` ("busy running something else;
-type /cancel to abort").
+`⏳ Busy running something else. Send /cancel to abort.`
 
 > Group chats: state belongs to the **chat**, not the person. The whole group
 > shares one directory and one Claude session — anyone in `allowed_user_ids` can
@@ -238,7 +239,7 @@ bot:  ┌ (<pre> block)
 
 ```text
 you:  cd /var/log
-bot:  ✓ (không có output) · 📁 /var/log        ← "no output"
+bot:  ✓ (no output) · 📁 /var/log
 you:  pwd
 bot:  /var/log
 ```
@@ -252,14 +253,14 @@ Things worth knowing:
 - **stdout and stderr are merged**, flushed to Telegram about every 1.2 s; long
   output is split to fit Telegram's 4096-character limit, cut at line boundaries.
 - **~100 KB of output per command**, after which it is truncated with
-  `… (output quá dài, đã cắt bớt)` ("output too long, truncated"). Keep noisy
+  `… (output too long, truncated)`. Keep noisy
   commands bounded: `journalctl -u nginx -n 50`, `... | tail -100`.
 - When the command finishes the bot appends a summary: `exit <code>` if non-zero,
-  `✓ (không có output)` if it printed nothing, and `📁 <dir>` if the directory
+  `✓ (no output)` if it printed nothing, and `📁 <dir>` if the directory
   changed.
 - `/cancel` **kills the whole process group**, so children die with it.
 - With `command_timeout_seconds` > 0, a command that overruns is cancelled with
-  `⏱️ hết thời gian, đã hủy` ("timed out, cancelled").
+  `⏱️ timed out, cancelled`.
 
 **What does not work** (there is no real terminal):
 
@@ -286,7 +287,7 @@ You will see four kinds of message:
 |-------|---------|
 | Streaming text | Claude's answer, collected into **one** message that is edited as it grows (~1.5 s per edit). Past 3500 characters it starts a new message |
 | `💻 Bash` / `✍️ Write` / `📖 Read` / `🔍 Grep` / `🌐 WebFetch` / `🤖 Task` … | Claude just called that tool, with the most useful part of the input (command, path, pattern…) |
-| `⚠️ tool lỗi:` | The tool ran and failed ("tool error"). Successful tools stay silent to avoid noise |
+| `⚠️ tool error:` | The tool ran and failed. Successful tools stay silent to avoid noise |
 | `— 7.4s · $0.0231` | End of turn: duration and cost |
 
 ### Sending photos & files
@@ -323,29 +324,28 @@ bot:  ⏳ The stack trace in the image points at a nil pointer in sessions.go:13
 When Claude wants to run a tool it does not have permission for, the bot sends:
 
 ```text
-🔐 Claude xin phép dùng ✍️ Write        ← "Claude asks to use Write"
+🔐 Claude asks to use ✍️ Write
 hello.txt
 ┌ /home/user/hello.txt
 │ ---
-│ xin chao
+│ hello
 └
-tự động từ chối sau 5 phút               ← "auto-deny in 5 minutes"
+auto-denied in 5 minutes
 
-[✅ Cho phép]  [❌ Từ chối]               ← Allow / Deny
-[⏩ Cho phép luôn (phiên này)]            ← Always allow (this session)
+[✅ Allow]  [❌ Deny]
+[⏩ Always allow (this session)]
 ```
 
 | Button | Effect |
 |--------|--------|
-| ✅ **Cho phép** (Allow) | This time only |
-| ⏩ **Cho phép luôn** (Always allow, this session) | Accepts Claude Code's own permission suggestion (e.g. switch to `acceptEdits`), so similar work stops asking. Ends when the session closes |
-| ❌ **Từ chối** (Deny) | Claude receives `deny` and works around it or reports back |
+| ✅ **Allow** | This time only |
+| ⏩ **Always allow (this session)** | Accepts Claude Code's own permission suggestion (e.g. switch to `acceptEdits`), so similar work stops asking. Ends when the session closes |
+| ❌ **Deny** | Claude receives `deny` and works around it or reports back |
 
 - Once pressed, that message **loses its buttons** and records the outcome
-  (`✅ Đã cho phép.` = allowed).
+  (`✅ Allowed.`).
 - Nobody presses within `claude_ask_timeout_seconds` (default 5 minutes) → it is
-  **auto-denied** and the message reads `❌ Đã từ chối — hết thời gian chờ.`
-  ("denied — timed out").
+  **auto-denied** and the message reads `❌ Denied — timed out.`
 - While a prompt is pending the chat counts as busy, so you cannot send a new
   prompt — but **buttons still work**.
 - `/cancel` while pending: the bot sends `interrupt` to Claude and denies the
@@ -370,15 +370,14 @@ the default for that chat's later sessions.
 ```text
 /perm
 
-🔧 Chế độ quyền: manual (đang áp cho phiên đang mở)
-   ↑ "permission mode: manual (in effect for the open session)"
+🔧 Permission mode: manual (in effect for the open session)
 
-✅ manual — hỏi mọi thứ cần quyền (mặc định)
-•  acceptEdits — tự cho sửa file, tool khác vẫn hỏi
-•  auto — để model tự phán cho phép/từ chối
-•  dontAsk — không hỏi; cái chưa được cho phép trước thì từ chối
-•  plan — chỉ lập kế hoạch, không thao tác
-•  bypassPermissions — bỏ qua mọi kiểm tra
+✅ manual — asks about everything that needs permission (default)
+•  acceptEdits — file edits auto-approved, other tools still ask
+•  auto — let the model decide allow/deny
+•  dontAsk — never asks; anything not pre-approved is denied
+•  plan — planning only, no changes
+•  bypassPermissions — skip every check
 
 [✅ manual]  [acceptEdits]
 [auto]       [dontAsk]
@@ -403,6 +402,32 @@ Two gotchas:
 - `/reset` returns the permission mode to the config value — a wider permission
   you just set does not survive `/reset`.
 
+## Language: `/lang`
+
+`/lang` with no argument lists the languages with buttons; `/lang vi` switches
+immediately. The choice is **per chat** and survives `/reset` — it is your
+preference, not session state.
+
+```text
+/lang
+
+🌐 Language: <b>English</b>
+
+✅ <code>en</code> — English
+• <code>vi</code> — Tiếng Việt
+
+Tap a button or type /lang <code>.
+
+[✅ English]  [Tiếng Việt]
+```
+
+- `language` in the config sets the default for chats that never ran `/lang`.
+- The bot's **log is always English**, whatever the chat language, so one machine
+  produces one kind of log.
+- Adding a language means adding one map to `i18n.go`; a test
+  (`TestLangCatalogParity`) fails if it is missing keys or if its `%s`/`%d`
+  placeholders do not line up with English.
+
 ## Sessions: `/session`
 
 Claude Code stores each session as a single file
@@ -413,20 +438,19 @@ directly, so it also sees sessions you ran **in a terminal**.
 ```text
 /session
 
-📚 Phiên Claude tại 📁 /home/user/project/telegram-terminal
-   ↑ "Claude sessions in <dir>"
+📚 Claude sessions in 📁 /home/user/project/telegram-terminal
 
-1. a1b2c3d4 · 16:00 · fix the config parser ▶️ đang mở      ← "open"
+1. a1b2c3d4 · 16:00 · fix the config parser ▶️ open
 2. e5f6a7b8 · 15:13 · add tests for permissions
 3. 9c8d7e6f · 14:42 · clean up noisy logs
 …
 
-/session <số|id> để mở lại · /session new để mở phiên mới
+/session <n|id> to resume · /session new for a new session
 ```
 
 | Send | Effect |
 |------|--------|
-| `/session` | List up to 12 sessions for the **current directory**, newest first; the label is the session's first prompt; the open one is marked `▶️ đang mở` |
+| `/session` | List up to 12 sessions for the **current directory**, newest first; the label is the session's first prompt; the open one is marked `▶️ open` |
 | `/session 2` | Resume by list position |
 | `/session e5f6a7b8` | Resume by id — needs **at least 3 leading characters** (1–2 digits are read as a list position) |
 | `/session new` | Close the open session; the next prompt opens a fresh one in the current directory |
@@ -437,7 +461,7 @@ directly, so it also sees sessions you ran **in a terminal**.
   move it; `/status` warns when the two drift apart, and `/session new` reopens
   in the current directory.
 - A brand-new session has **no id yet** (Claude Code only issues one on the first
-  turn) — `/status` shows `mới (chưa có id)` ("new, no id yet").
+  turn) — `/status` shows `new (no id yet)`.
 - If that session is **currently running in another terminal**, `claude` opens a
   **copy**: from then on the two diverge instead of merging.
 - `/session` only lists sessions for the current directory. To see another
@@ -448,22 +472,21 @@ directly, so it also sees sessions you ran **in a terminal**.
 ```text
 /status
 
-🖥️ server-01 · chế độ: claude                              ← host · mode
+🖥️ server-01 · mode: claude
 📁 /home/user/project/telegram-terminal
-🤖 Phiên: a1b2c3d4 · claude-opus-5 · quyền manual           ← session · model · permission mode
+🤖 Session: a1b2c3d4 · claude-opus-5 · manual permissions
 
-/perm đổi quyền · /session đổi phiên · /session new mở phiên mới
+/perm permissions · /session sessions · /session new for a new session
 ```
 
 | Line | Meaning |
 |------|---------|
-| `🖥️ <host> · chế độ:` | Which machine you are typing into, and whether you are in shell or Claude mode |
+| `🖥️ <host> · mode:` | Which machine you are typing into, and whether you are in shell or Claude mode |
 | `📁` | The **chat's** current directory (where shell commands run) |
-| `🤖 Phiên:` | short id · model · the session's **actual** permission mode |
-| `⚠️ Phiên đang ở 📁 …` | `cd` has moved the chat's directory away from the session's |
+| `🤖 Session:` | short id · model · the session's **actual** permission mode |
+| `⚠️ The session is in 📁 …` | `cd` has moved the chat's directory away from the session's |
 
-With no session open: `🤖 Phiên: chưa mở · quyền manual sẽ áp khi mở`
-("no session open; manual will apply when one opens").
+With no session open: `🤖 Session: none open · manual permissions will apply when one opens`.
 
 ## Full command list
 
@@ -478,6 +501,7 @@ With no session open: `🤖 Phiên: chưa mở · quyền manual sẽ áp khi m�
 | `/session <n\|id>` | Resume one of them |
 | `/session new` | Close the current session, open a new one here |
 | `/perm [mode]` | Change the permission mode (with buttons) |
+| `/lang [code]` | Change the interface language: `en`, `vi` (with buttons) |
 | `/status` | Show mode, directory, Claude session & permissions |
 | `/reset` | Back to the default directory, shell mode, config permissions & close the session (deletes nothing on disk) |
 | `/help` | Help |
@@ -486,7 +510,7 @@ Aliases, kept for muscle memory:
 
 ```text
 /shell = /sh          /claude = /c          /stop = /cancel
-/permission = /perm   /mode, /st, /pwd = /status
+/permission = /perm   /language = /lang   /mode, /st, /pwd = /status
 /sessions, /ss, /newchat, /resume, /r = /session
 ```
 
@@ -549,30 +573,30 @@ carry on with the rest, please
 
 ## Limits & troubleshooting
 
-The left column quotes what the bot or systemd actually prints (Vietnamese where
-the bot says it).
+The left column quotes what the bot or systemd actually prints (with the default
+English interface).
 
 | Symptom | Cause & fix |
 |---------|-------------|
-| `Bot chưa cấu hình allowlist. User ID của bạn: 123…` | `allowed_user_ids` is empty. Add the ID and restart |
-| `⛔ Bạn không có quyền dùng bot này.` | Your User ID is not in the allowlist |
-| `⚠️ claude: … (kiểm tra: đã cài claude và đăng nhập cho user này chưa?)` | Run `claude -p "hello"` **as the bot's user** once. If `claude` lives in `~/.local/bin` and systemd cannot see it, set `claude_bin` to an absolute path |
-| `Claude chưa được bật trong cấu hình` | Missing `"claude_enabled": true` |
-| `claude không phản hồi bắt tay initialize` | `claude` took over 60 s to start or is blocked (e.g. waiting on login). Try running it by hand as that user |
-| `⏳ Đang bận chạy lệnh khác` | One job per chat. `/cancel` or wait |
+| `This bot has no allowlist configured. Your User ID: 123…` | `allowed_user_ids` is empty. Add the ID and restart |
+| `⛔ You are not allowed to use this bot.` | Your User ID is not in the allowlist |
+| `⚠️ claude: … (check: is claude installed and logged in for this user?)` | Run `claude -p "hello"` **as the bot's user** once. If `claude` lives in `~/.local/bin` and systemd cannot see it, set `claude_bin` to an absolute path |
+| `Claude is not enabled in the config` | Missing `"claude_enabled": true` |
+| `claude did not answer initialize` | `claude` took over 60 s to start or is blocked (e.g. waiting on login). Try running it by hand as that user |
+| `⏳ Busy running something else` | One job per chat. `/cancel` or wait |
 | Bot silent, nothing in the log | Two instances share one token (e.g. the service plus a manual run) → Telegram splits updates between them at random. Keep exactly one |
-| `… (output quá dài, đã cắt bớt)` | Over ~100 KB for that command. Add `tail`, `-n`, `--no-pager` |
+| `… (output too long, truncated)` | Over ~100 KB for that command. Add `tail`, `-n`, `--no-pager` |
 | Command hangs forever | It wants input or never exits — see "What does not work" above. `/cancel` stops it |
 | `sudo: a password is required` | `sudo` needs a TTY and cannot work through the bot. Use a real terminal |
 | Claude cannot see the file you just `cd`'d to | The session keeps its original directory. `/session new` |
-| A button does nothing and shows "Yêu cầu này không còn chờ trả lời nữa" | That request timed out, was cancelled, or its session closed |
+| A button does nothing and shows "That request is no longer waiting for an answer." | That request timed out, was cancelled, or its session closed |
 | Config change has no effect | You have not run `sudo systemctl restart telegram-terminal` |
 | `Failed to execute …: Exec format error`, `status=203/EXEC`, service restarting forever | Wrong CPU architecture. Compare `uname -m` with `file /usr/local/bin/telegram-terminal`, then rebuild for the right `GOARCH` (see Build) |
 | `status=203/EXEC` with the right architecture | The file was truncated/corrupted in transit. Compare `sha256sum` on both ends |
-| `⚠️ Chưa hỗ trợ gửi … cho Claude` | Video, animated GIF, voice, audio. Only photos and documents are supported |
-| `⚠️ không tải được file: file lớn hơn 20.0 MB` | A Bot API limit, not this bot's. Shrink the file, or `scp` it over and point Claude at the path |
-| `📎 Đã lưu … Đang ở chế độ shell nên chưa gửi cho Claude` | You sent a photo while in shell mode. Type `/c` and send it again |
-| `📎 … lớn hơn giới hạn nhúng` | The image exceeds `image_max_bytes`; Claude will read it with the `Read` tool (needs permission). Raise `image_max_bytes` to embed bigger images — up to ~3.7 MB, since the Claude API caps at 5 MB after base64 |
+| `⚠️ Sending … to Claude is not supported yet` | Video, animated GIF, voice, audio. Only photos and documents are supported |
+| `⚠️ could not download the file: the file is larger than 20.0 MB` | A Bot API limit, not this bot's. Shrink the file, or `scp` it over and point Claude at the path |
+| `📎 Saved … You are in shell mode so it was not sent to Claude` | You sent a photo while in shell mode. Type `/c` and send it again |
+| `📎 … is over the embed limit` | The image exceeds `image_max_bytes`; Claude will read it with the `Read` tool (needs permission). Raise `image_max_bytes` to embed bigger images — up to ~3.7 MB, since the Claude API caps at 5 MB after base64 |
 
 Reading the log:
 
@@ -584,9 +608,10 @@ journalctl -u telegram-terminal --since "1h ago" --no-pager
 The bot logs every session open/resume and every permission button press:
 
 ```text
-claude: phiên mới cho chat 111111111 (cwd=/home/user)
-claude: mở lại phiên e5f6a7b8-… cho chat 111111111 (cwd=/home/user)
+claude: new session for chat 111111111 (cwd=/home/user)
+claude: resumed session e5f6a7b8-… for chat 111111111 (cwd=/home/user)
 quyền: chat 111111111, user 111111111 -> allow (always=true)
+language: chat 111111111 -> vi
 ```
 
 ---
@@ -629,7 +654,7 @@ Details worth knowing:
   `manual` — the bot converts both ways.
 - Files: `main.go` (Telegram + shell), `claude.go` (Claude session, permissions),
   `sessions.go` (list/resume sessions), `media.go` (download attachments, group
-  albums).
+  albums), `i18n.go` (interface strings per language).
 
 # Running the tests
 

@@ -106,10 +106,14 @@ func (m *tgMock) bot(cfg Config) *Bot {
 		pollClient: m.srv.Client(),
 		sendClient: m.srv.Client(),
 		sessions:   map[int64]*Session{},
+		langs:      map[int64]string{},
 		allowed:    map[int64]bool{7: true},
 		albums:     map[string]*albumBuf{},
 	}
 }
+
+// jsonUnmarshalString: tiện cho test dựng struct Telegram từ JSON thật.
+func jsonUnmarshalString(raw string, v any) error { return json.Unmarshal([]byte(raw), v) }
 
 // msgUpdate dựng 1 Update tin nhắn từ user 7 trong chat 1 (đi qua đúng đường
 // giải mã JSON của Telegram).
@@ -185,13 +189,13 @@ func TestClaudeAllowAlways(t *testing.T) {
 	if !containsSub(sent, "ls -la") || !containsSub(sent, "Bash") {
 		t.Errorf("chưa báo tool_use: %q", sent)
 	}
-	if !containsSub(sent, "xin phép") {
+	if !containsSub(sent, "asks to use") {
 		t.Errorf("chưa gửi tin xin quyền: %q", sent)
 	}
-	if !containsSub(edits, "Đã cho phép") {
+	if !containsSub(edits, "Allowed") {
 		t.Errorf("chưa cập nhật lại tin xin quyền: %q", edits)
 	}
-	if !containsSub(answers, "cho phép") {
+	if !containsSub(answers, "Allowed") {
 		t.Errorf("chưa answerCallbackQuery: %q", answers)
 	}
 	if !containsSub(sent, "$0.0042") || !containsSub(sent, "1.2s") {
@@ -255,7 +259,7 @@ func TestClaudeAskTimeout(t *testing.T) {
 		t.Errorf("đáng lẽ tự động từ chối: %s", raw)
 	}
 	_, edits, _ := tg.all()
-	if !containsSub(edits, "hết thời gian chờ") {
+	if !containsSub(edits, "timed out") {
 		t.Errorf("chưa báo lý do hết thời gian: %q", edits)
 	}
 }
@@ -289,7 +293,7 @@ func TestClaudeCancel(t *testing.T) {
 		t.Fatal("hủy không kết thúc được lượt")
 	}
 	sent, _, _ := tg.all()
-	if !containsSub(sent, "Đã hủy") {
+	if !containsSub(sent, "Cancelled") {
 		t.Errorf("chưa báo đã hủy: %q", sent)
 	}
 }

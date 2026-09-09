@@ -123,7 +123,7 @@ func imageSource(t *testing.T, blk map[string]any) (mediaType string, data []byt
 // ------------------------------ Unit test -----------------------------
 
 func TestClaudeContentPlainTextStaysString(t *testing.T) {
-	c := textPrompt("chào bạn").claudeContent()
+	c := textPrompt("chào bạn").claudeContent(langEN)
 	if s, ok := c.(string); !ok || s != "chào bạn" {
 		t.Fatalf("prompt không ảnh phải là string thuần, nhận %#v", c)
 	}
@@ -133,9 +133,9 @@ func TestClaudeContentInlineImage(t *testing.T) {
 	p := prompt{text: "ảnh này là gì?", atts: []attachment{
 		{path: "/tmp/x/a.png", name: "a.png", mediaType: "image/png", data: []byte("PNGDATA"), inline: true},
 	}}
-	blocks, ok := p.claudeContent().([]any)
+	blocks, ok := p.claudeContent(langEN).([]any)
 	if !ok || len(blocks) != 2 {
-		t.Fatalf("muốn 2 content block, nhận %#v", p.claudeContent())
+		t.Fatalf("muốn 2 content block, nhận %#v", p.claudeContent(langEN))
 	}
 	text := blocks[0].(map[string]any)["text"].(string)
 	if !strings.Contains(text, "ảnh này là gì?") || !strings.Contains(text, "/tmp/x/a.png") {
@@ -157,9 +157,9 @@ func TestClaudeContentOversizeFallsBackToPath(t *testing.T) {
 	p := prompt{text: "xem đi", atts: []attachment{
 		{path: "/tmp/big.jpg", name: "big.jpg", mediaType: "image/jpeg", size: 9 << 20},
 	}}
-	s, ok := p.claudeContent().(string)
+	s, ok := p.claudeContent(langEN).(string)
 	if !ok {
-		t.Fatalf("muốn string thuần, nhận %#v", p.claudeContent())
+		t.Fatalf("muốn string thuần, nhận %#v", p.claudeContent(langEN))
 	}
 	if !strings.Contains(s, "/tmp/big.jpg") || !strings.Contains(s, "Read") {
 		t.Errorf("thiếu hướng dẫn đọc file: %q", s)
@@ -366,7 +366,7 @@ func TestMediaOversizePhotoPathOnly(t *testing.T) {
 		t.Errorf("prompt phải hướng Claude tự Read: %q", text)
 	}
 	sent, _, _ := tg.all()
-	if !containsSub(sent, "giới hạn nhúng") {
+	if !containsSub(sent, "over the embed limit") {
 		t.Errorf("chưa nhắc người dùng về giới hạn: %v", sent)
 	}
 }
@@ -384,7 +384,7 @@ func TestMediaInShellModeSavesOnly(t *testing.T) {
 		t.Error("chế độ shell không được gửi gì cho Claude")
 	}
 	sent, _, _ := tg.all()
-	if !containsSub(sent, "Đã lưu") {
+	if !containsSub(sent, "Saved") {
 		t.Errorf("chưa báo đường dẫn file: %v", sent)
 	}
 	files, _ := filepath.Glob(filepath.Join(b.cfg.imageDir(), "1", "*"))
@@ -471,7 +471,7 @@ func TestMediaUnsupportedVoice(t *testing.T) {
 		t.Error("không được gửi tin nhắn thoại cho Claude")
 	}
 	sent, _, _ := tg.all()
-	if !containsSub(sent, "Chưa hỗ trợ") {
+	if !containsSub(sent, "not supported") {
 		t.Errorf("chưa báo loại media không hỗ trợ: %v", sent)
 	}
 	tg.mu.Lock()

@@ -206,10 +206,10 @@ func shortTime(t time.Time) string {
 
 // --------------------------- Lệnh Telegram ----------------------------
 
-// sessionsText dựng nội dung cho /sessions: danh sách phiên đã lưu ở thư mục
-// hiện tại, phiên đang mở được đánh dấu ▶️ ngay trong danh sách (trạng thái
-// đầy đủ xem ở /status).
-func (b *Bot) sessionsText(sess *Session) string {
+// sessionsText dựng nội dung cho /session: danh sách phiên đã lưu ở thư mục
+// hiện tại, phiên đang mở được đánh dấu ngay trong danh sách (trạng thái đầy đủ
+// xem ở /status).
+func (b *Bot) sessionsText(chatID int64, sess *Session) string {
 	sess.mu.Lock()
 	cwd, cs := sess.cwd, sess.claude
 	sess.mu.Unlock()
@@ -222,32 +222,32 @@ func (b *Bot) sessionsText(sess *Session) string {
 		curCwd = cs.cwd
 	}
 
+	l := b.lang(chatID)
 	var sb strings.Builder
-	fmt.Fprintf(&sb, "📚 Phiên Claude tại 📁 <code>%s</code>\n\n", htmlEscape(cwd))
+	sb.WriteString(l.t("sess.head", htmlEscape(cwd)))
 
 	list := listSessions(projectsDir(), cwd, sessionListMax)
 	if len(list) == 0 {
-		sb.WriteString("Chưa có phiên nào được lưu cho thư mục này.\n")
+		sb.WriteString(l.t("sess.none"))
 	}
 	inList := false
 	for i, s := range list {
 		label := s.First
 		if label == "" {
-			label = "(không rõ)"
+			label = l.t("sess.unknown")
 		}
 		mark := ""
 		if s.ID == curID {
-			mark, inList = " ▶️ đang mở", true
+			mark, inList = l.t("sess.open.mark"), true
 		}
 		fmt.Fprintf(&sb, "%d. <code>%s</code> · %s · %s%s\n",
 			i+1, htmlEscape(shortID(s.ID)), shortTime(s.MTime), htmlEscape(label), mark)
 	}
 	if curID != "" && !inList {
-		fmt.Fprintf(&sb, "\n▶️ Đang mở phiên <code>%s</code> ở 📁 <code>%s</code>\n",
-			htmlEscape(shortID(curID)), htmlEscape(curCwd))
+		sb.WriteString(l.t("sess.open.other", htmlEscape(shortID(curID)), htmlEscape(curCwd)))
 	}
 	if len(list) > 0 {
-		sb.WriteString("\n/session &lt;số|id&gt; để mở lại · /session new để mở phiên mới.")
+		sb.WriteString(l.t("sess.hint"))
 	}
 	return sb.String()
 }
@@ -261,16 +261,16 @@ func shortID(id string) string {
 
 // resolveSession đổi tham số của /resume (số thứ tự hoặc id/prefix id) thành
 // session id đầy đủ.
-func resolveSession(list []sessionInfo, arg string) (string, error) {
+func resolveSession(l *language, list []sessionInfo, arg string) (string, error) {
 	arg = strings.TrimSpace(arg)
 	if arg == "" {
-		return "", fmt.Errorf("thiếu tham số")
+		return "", fmt.Errorf("%s", l.t("sess.err.missing"))
 	}
 	// Số thứ tự chỉ có 1-2 chữ số (danh sách tối đa sessionListMax); dài hơn
 	// thì đó là id — id là hex nên có thể toàn chữ số, VD "33333333".
 	if n, err := strconv.Atoi(arg); err == nil && len(arg) <= 2 {
 		if n < 1 || n > len(list) {
-			return "", fmt.Errorf("không có phiên số %d (đang liệt kê %d phiên)", n, len(list))
+			return "", fmt.Errorf("%s", l.t("sess.err.number", n, len(list)))
 		}
 		return list[n-1].ID, nil
 	}
@@ -288,9 +288,9 @@ func resolveSession(list []sessionInfo, arg string) (string, error) {
 		if len(arg) >= 8 {
 			return arg, nil
 		}
-		return "", fmt.Errorf("không tìm thấy phiên %q", arg)
+		return "", fmt.Errorf("%s", l.t("sess.err.not.found", arg))
 	default:
-		return "", fmt.Errorf("%q khớp %d phiên, gõ thêm ký tự", arg, len(hits))
+		return "", fmt.Errorf("%s", l.t("sess.err.ambiguous", arg, len(hits)))
 	}
 }
 
@@ -308,9 +308,9 @@ func (b *Bot) sessionCmd(chatID int64, sess *Session, cmd, arg string) {
 	case arg != "":
 		b.resumeSession(chatID, sess, arg)
 	case cmd == "/resume", cmd == "/r":
-		b.send(chatID, "Dùng: /session &lt;số|id&gt; — gõ /session để xem danh sách.", true)
+		b.send(chatID, b.t(chatID, "sess.usage"), true)
 	default:
-		b.send(chatID, b.sessionsText(sess), true)
+		b.send(chatID, b.sessionsText(chatID, sess), true)
 	}
 }
 
@@ -320,9 +320,9 @@ func (b *Bot) newSession(chatID int64, sess *Session) {
 	sess.mu.Lock()
 	cwd := sess.cwd
 	sess.mu.Unlock()
-	msg := "🆕 Prompt tiếp theo sẽ mở phiên Claude mới tại 📁 " + cwd
+	msg := b.t(chatID, "sess.new", cwd)
 	if had {
-		msg = "🆕 Đã đóng phiên Claude cũ. " + msg
+		msg = b.t(chatID, "sess.new.closed") + msg
 	}
 	b.send(chatID, msg, false)
 }
@@ -333,13 +333,14 @@ func (b *Bot) resumeSession(chatID int64, sess *Session, arg string) {
 	cwd, running := sess.cwd, sess.running
 	sess.mu.Unlock()
 	if running {
-		b.send(chatID, "⏳ Đang chạy lệnh khác. Gõ /cancel rồi thử lại.", false)
+		b.send(chatID, b.t(chatID, "sess.busy"), false)
 		return
 	}
 
-	id, err := resolveSession(listSessions(projectsDir(), cwd, sessionListMax), arg)
+	l := b.lang(chatID)
+	id, err := resolveSession(l, listSessions(projectsDir(), cwd, sessionListMax), arg)
 	if err != nil {
-		b.send(chatID, "⚠️ "+err.Error()+"\nGõ /session để xem danh sách.", false)
+		b.send(chatID, l.t("sess.resolve.error", err.Error()), false)
 		return
 	}
 
@@ -347,7 +348,7 @@ func (b *Bot) resumeSession(chatID int64, sess *Session, arg string) {
 	b.stopClaude(sess)
 	cs, err := b.startClaude(chatID, cwd, id, mode)
 	if err != nil {
-		b.send(chatID, "⚠️ không mở lại được phiên: "+err.Error(), false)
+		b.send(chatID, l.t("sess.resume.error", err.Error()), false)
 		return
 	}
 	sess.mu.Lock()
@@ -355,6 +356,6 @@ func (b *Bot) resumeSession(chatID int64, sess *Session, arg string) {
 	sess.claudeMode = true
 	sess.mu.Unlock()
 
-	b.send(chatID, fmt.Sprintf("↩️ Đã mở lại phiên <code>%s</code> · 📁 <code>%s</code>\nquyền %s · gửi prompt để tiếp tục.",
-		htmlEscape(shortID(id)), htmlEscape(cwd), htmlEscape(cs.curPermMode())), true)
+	b.send(chatID, l.t("sess.resumed", htmlEscape(shortID(id)), htmlEscape(cwd),
+		htmlEscape(l.t("session.permission", cs.curPermMode()))), true)
 }

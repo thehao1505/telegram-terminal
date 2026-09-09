@@ -49,7 +49,7 @@ func textPrompt(s string) prompt { return prompt{text: s} }
 
 // claudeContent dựng field "content" của tin nhắn user gửi cho Claude: string
 // thuần khi không có ảnh nhúng, mảng content block khi có.
-func (p prompt) claudeContent() any {
+func (p prompt) claudeContent(l *language) any {
 	var inline []attachment
 	for _, a := range p.atts {
 		if a.inline {
@@ -57,9 +57,9 @@ func (p prompt) claudeContent() any {
 		}
 	}
 	if len(inline) == 0 {
-		return p.textBlock()
+		return p.textBlock(l)
 	}
-	blocks := []any{map[string]any{"type": "text", "text": p.textBlock()}}
+	blocks := []any{map[string]any{"type": "text", "text": p.textBlock(l)}}
 	for _, a := range inline {
 		blocks = append(blocks, map[string]any{
 			"type": "image",
@@ -75,7 +75,7 @@ func (p prompt) claudeContent() any {
 
 // textBlock: chữ của người dùng, kèm danh sách file đính kèm và đường dẫn thật
 // trên máy (để Claude đọc lại, crop, hay so sánh về sau).
-func (p prompt) textBlock() string {
+func (p prompt) textBlock(l *language) string {
 	if len(p.atts) == 0 {
 		return p.text
 	}
@@ -83,20 +83,20 @@ func (p prompt) textBlock() string {
 	for _, a := range p.atts {
 		switch {
 		case a.inline:
-			lines = append(lines, fmt.Sprintf("- %s — đã nhúng ở trên, bản gốc: %s", a.name, a.path))
+			lines = append(lines, l.t("media.inline", a.name, a.path))
 		case a.mediaType != "":
-			lines = append(lines, fmt.Sprintf("- %s — ảnh quá lớn để nhúng, dùng tool Read để xem: %s", a.name, a.path))
+			lines = append(lines, l.t("media.too.big", a.name, a.path))
 		default:
 			lines = append(lines, fmt.Sprintf("- %s — %s", a.name, a.path))
 		}
 	}
-	return strings.TrimSpace(p.text) + "\n\nNgười dùng gửi kèm qua Telegram:\n" + strings.Join(lines, "\n")
+	return strings.TrimSpace(p.text) + "\n\n" + l.t("media.prompt.header") + "\n" + strings.Join(lines, "\n")
 }
 
 // ---------------------------- Tải file về ------------------------------
 
 // getFile hỏi Telegram đường dẫn tải của một file_id.
-func (b *Bot) getFile(fileID string) (string, error) {
+func (b *Bot) getFile(l *language, fileID string) (string, error) {
 	v := url.Values{}
 	v.Set("file_id", fileID)
 	resp, err := b.sendClient.PostForm(b.api("getFile"), v)
@@ -116,7 +116,7 @@ func (b *Bot) getFile(fileID string) (string, error) {
 	}
 	if !r.OK || r.Result.FilePath == "" {
 		if r.Description == "" {
-			r.Description = "getFile không trả về file_path"
+			r.Description = l.t("media.err.file.path")
 		}
 		return "", fmt.Errorf("%s", r.Description)
 	}
@@ -124,21 +124,21 @@ func (b *Bot) getFile(fileID string) (string, error) {
 }
 
 // downloadFile tải nội dung file theo file_path mà getFile trả về.
-func (b *Bot) downloadFile(remotePath string) ([]byte, error) {
+func (b *Bot) downloadFile(l *language, remotePath string) ([]byte, error) {
 	resp, err := b.sendClient.Get(b.fileBase + remotePath)
 	if err != nil {
 		return nil, err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode >= 400 {
-		return nil, fmt.Errorf("tải file: HTTP %d", resp.StatusCode)
+		return nil, fmt.Errorf("%s", l.t("media.err.http", resp.StatusCode))
 	}
 	data, err := io.ReadAll(io.LimitReader(resp.Body, maxAttachBytes+1))
 	if err != nil {
 		return nil, err
 	}
 	if len(data) > maxAttachBytes {
-		return nil, fmt.Errorf("file lớn hơn %s", humanSize(maxAttachBytes))
+		return nil, fmt.Errorf("%s", l.t("media.err.too.big", humanSize(maxAttachBytes)))
 	}
 	if len(data) == 0 {
 		return nil, fmt.Errorf("file rỗng")
@@ -149,11 +149,12 @@ func (b *Bot) downloadFile(remotePath string) ([]byte, error) {
 // fetchAttachment tải 1 file của tin nhắn về đĩa và quyết định có nhúng được
 // vào prompt hay không.
 func (b *Bot) fetchAttachment(chatID, msgID int64, fileID, name string) (attachment, error) {
-	remote, err := b.getFile(fileID)
+	l := b.lang(chatID)
+	remote, err := b.getFile(l, fileID)
 	if err != nil {
 		return attachment{}, err
 	}
-	data, err := b.downloadFile(remote)
+	data, err := b.downloadFile(l, remote)
 	if err != nil {
 		return attachment{}, err
 	}
@@ -282,16 +283,17 @@ func (m *tgMessage) attachRef(max int) (fileID, name string) {
 }
 
 // unsupportedMedia trả về tên loại media chưa hỗ trợ (rỗng nếu không có).
+// unsupportedMedia trả về key catalog của loại media chưa hỗ trợ ("" nếu không có).
 func (m *tgMessage) unsupportedMedia() string {
 	switch {
 	case m.Video != nil:
-		return "video"
+		return "media.type.video"
 	case m.Animation != nil:
-		return "GIF động"
+		return "media.type.animation"
 	case m.Voice != nil:
-		return "tin nhắn thoại"
+		return "media.type.voice"
 	case m.Audio != nil:
-		return "audio"
+		return "media.type.audio"
 	}
 	return ""
 }
@@ -306,7 +308,7 @@ func (m *tgMessage) hasMedia() bool {
 // (chế độ claude) hoặc chỉ báo đường dẫn (chế độ shell).
 func (b *Bot) handleMedia(chatID int64, sess *Session, msg *tgMessage, text string) {
 	if msg.unsupportedMedia() != "" {
-		b.send(chatID, "⚠️ Chưa hỗ trợ gửi "+msg.unsupportedMedia()+" cho Claude. Ảnh và file thì được.", false)
+		b.send(chatID, b.t(chatID, "media.unsupported", b.t(chatID, msg.unsupportedMedia())), false)
 		return
 	}
 	b.typing(chatID)
@@ -317,7 +319,7 @@ func (b *Bot) handleMedia(chatID int64, sess *Session, msg *tgMessage, text stri
 	}
 	a, err := b.fetchAttachment(chatID, msg.MessageID, fileID, name)
 	if err != nil {
-		b.send(chatID, "⚠️ không tải được file: "+htmlEscape(err.Error()), false)
+		b.send(chatID, b.t(chatID, "media.download.error", htmlEscape(err.Error())), false)
 		return
 	}
 
@@ -325,8 +327,7 @@ func (b *Bot) handleMedia(chatID int64, sess *Session, msg *tgMessage, text stri
 	claudeMode := sess.claudeMode
 	sess.mu.Unlock()
 	if !claudeMode || !b.cfg.ClaudeEnabled {
-		b.send(chatID, fmt.Sprintf("📎 Đã lưu <code>%s</code> (%s)\nĐang ở chế độ shell nên chưa gửi cho Claude — /c rồi gửi lại là Claude xem được ảnh.",
-			htmlEscape(a.path), humanSize(a.size)), true)
+		b.send(chatID, b.t(chatID, "media.shell.saved", htmlEscape(a.path), humanSize(a.size)), true)
 		return
 	}
 
@@ -338,29 +339,32 @@ func (b *Bot) handleMedia(chatID int64, sess *Session, msg *tgMessage, text stri
 	}
 
 	if !a.inline {
-		b.send(chatID, b.attachNote(a), false)
+		b.send(chatID, b.attachNote(chatID, a), false)
 	}
 	b.execGuarded(chatID, sess, func(ctx context.Context) {
-		b.runClaude(ctx, chatID, sess, prompt{text: b.mediaText(text), atts: []attachment{a}})
+		b.runClaude(ctx, chatID, sess, prompt{text: b.mediaText(chatID, text), atts: []attachment{a}})
 	})
 }
 
 // attachNote: nhắc khi file không được nhúng thẳng vào lượt.
-func (b *Bot) attachNote(a attachment) string {
+func (b *Bot) attachNote(chatID int64, a attachment) string {
 	if a.mediaType != "" {
-		return fmt.Sprintf("📎 %s (%s) lớn hơn giới hạn nhúng %s — Claude sẽ tự đọc file bằng tool Read.",
-			a.name, humanSize(a.size), humanSize(b.cfg.imageMaxBytes()))
+		return b.t(chatID, "media.note.too.big", a.name, humanSize(a.size), humanSize(b.cfg.imageMaxBytes()))
 	}
-	return fmt.Sprintf("📎 %s (%s) không phải ảnh — đã lưu, Claude sẽ tự đọc file nếu cần.",
-		a.name, humanSize(a.size))
+	return b.t(chatID, "media.note.not.image", a.name, humanSize(a.size))
 }
 
 // mediaText: caption của người dùng, hoặc prompt mặc định nếu gửi ảnh trơn.
-func (b *Bot) mediaText(text string) string {
+// mediaText: caption làm prompt; không có caption thì lấy config, config trống
+// thì lấy chuỗi mặc định theo ngôn ngữ của chat.
+func (b *Bot) mediaText(chatID int64, text string) string {
 	if strings.TrimSpace(text) != "" {
 		return text
 	}
-	return b.cfg.imageDefaultPrompt()
+	if p := b.cfg.imageDefaultPrompt(); p != "" {
+		return p
+	}
+	return b.t(chatID, "media.default.prompt")
 }
 
 // albumBuf: các ảnh cùng một media_group_id đang chờ gom.
@@ -400,11 +404,11 @@ func (b *Bot) flushAlbum(chatID int64, sess *Session, groupID string) {
 	}
 	for _, a := range buf.atts {
 		if !a.inline {
-			b.send(chatID, b.attachNote(a), false)
+			b.send(chatID, b.attachNote(chatID, a), false)
 		}
 	}
 	b.execGuarded(chatID, sess, func(ctx context.Context) {
-		b.runClaude(ctx, chatID, sess, prompt{text: b.mediaText(buf.text), atts: buf.atts})
+		b.runClaude(ctx, chatID, sess, prompt{text: b.mediaText(chatID, buf.text), atts: buf.atts})
 	})
 }
 

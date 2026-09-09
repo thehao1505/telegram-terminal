@@ -59,6 +59,10 @@ type Config struct {
 	ImageMaxBytes      int    `json:"image_max_bytes"`      // trên mức này chỉ đưa đường dẫn
 	ImageKeepHours     int    `json:"image_keep_hours"`     // dọn file cũ lúc khởi động (mặc định 24, số âm = giữ mãi)
 	ImageDefaultPrompt string `json:"image_default_prompt"` // prompt khi gửi ảnh không caption
+
+	// Ngôn ngữ giao diện mặc định: "en" (mặc định) hoặc "vi". Mỗi chat đổi
+	// riêng được bằng /lang.
+	Language string `json:"language"`
 }
 
 func (c *Config) claudePermissionMode() string {
@@ -101,11 +105,17 @@ func (c *Config) imageKeepHours() int {
 	return c.ImageKeepHours
 }
 
+// imageDefaultPrompt: rỗng = dùng chuỗi theo ngôn ngữ của chat.
 func (c *Config) imageDefaultPrompt() string {
-	if strings.TrimSpace(c.ImageDefaultPrompt) == "" {
-		return "Xem file đính kèm."
+	return strings.TrimSpace(c.ImageDefaultPrompt)
+}
+
+// language: ngôn ngữ mặc định cho mọi chat.
+func (c *Config) language() *language {
+	if l := languageByCode(c.Language); l != nil {
+		return l
 	}
-	return c.ImageDefaultPrompt
+	return langEN
 }
 
 func (c *Config) applyDefaults() {
@@ -166,6 +176,9 @@ func loadConfig(path string) (Config, error) {
 	if v := os.Getenv("TT_CLAUDE_PERMISSION_MODE"); v != "" {
 		c.ClaudePermissionMode = v
 	}
+	if v := os.Getenv("TT_LANG"); v != "" {
+		c.Language = v
+	}
 	if v := os.Getenv("TT_IMAGE_DIR"); v != "" {
 		c.ImageDir = v
 	}
@@ -199,6 +212,7 @@ type Bot struct {
 	pollClient *http.Client
 	sendClient *http.Client
 	sessions   map[int64]*Session
+	langs      map[int64]string // chatID -> mã ngôn ngữ, "" = theo config (giữ bởi smu)
 	smu        sync.Mutex
 	allowed    map[int64]bool
 	hostname   string
@@ -220,6 +234,7 @@ func newBot(cfg Config) *Bot {
 		pollClient: &http.Client{Timeout: 70 * time.Second},
 		sendClient: &http.Client{Timeout: 30 * time.Second},
 		sessions:   map[int64]*Session{},
+		langs:      map[int64]string{},
 		allowed:    allowed,
 		hostname:   host,
 		albums:     map[string]*albumBuf{},
@@ -235,6 +250,32 @@ func (b *Bot) session(chatID int64) *Session {
 		b.sessions[chatID] = s
 	}
 	return s
+}
+
+// lang trả về ngôn ngữ của chat: /lang đã chọn, không thì theo config.
+func (b *Bot) lang(chatID int64) *language {
+	b.smu.Lock()
+	code := b.langs[chatID]
+	b.smu.Unlock()
+	if l := languageByCode(code); l != nil {
+		return l
+	}
+	return b.cfg.language()
+}
+
+// t: chuỗi giao diện cho chat này. Dùng ở mọi nơi bot nói với người dùng.
+func (b *Bot) t(chatID int64, key string, args ...any) string {
+	return b.lang(chatID).t(key, args...)
+}
+
+// setLang ghi nhớ ngôn ngữ cho chat.
+func (b *Bot) setLang(chatID int64, code string) {
+	b.smu.Lock()
+	if b.langs == nil {
+		b.langs = map[int64]string{}
+	}
+	b.langs[chatID] = code
+	b.smu.Unlock()
 }
 
 // --------------------------- Telegram API -----------------------------
@@ -558,7 +599,7 @@ func (f *flusher) drain(all bool) {
 		f.b.sendChunked(f.chatID, out, f.code)
 	}
 	if f.truncated {
-		f.b.send(f.chatID, "… (output quá dài, đã cắt bớt)", false)
+		f.b.send(f.chatID, f.b.t(f.chatID, "output.truncated"), false)
 	}
 }
 
@@ -634,15 +675,15 @@ func (b *Bot) runShell(ctx context.Context, chatID int64, sess *Session, cmdline
 	var parts []string
 	switch {
 	case ctx.Err() == context.DeadlineExceeded:
-		parts = append(parts, "⏱️ hết thời gian, đã hủy")
+		parts = append(parts, b.t(chatID, "shell.timeout"))
 	case ctx.Err() == context.Canceled:
-		parts = append(parts, "🛑 đã hủy")
+		parts = append(parts, b.t(chatID, "shell.cancelled"))
 	default:
 		if !haveMeta && waitErr != nil {
 			parts = append(parts, "⚠️ "+waitErr.Error())
 		}
 		if f.sent == 0 && haveMeta && exitCode == 0 {
-			parts = append(parts, "✓ (không có output)")
+			parts = append(parts, b.t(chatID, "shell.nooutput"))
 		}
 		if exitCode != 0 {
 			parts = append(parts, fmt.Sprintf("exit %d", exitCode))
@@ -664,7 +705,7 @@ func (b *Bot) execGuarded(chatID int64, sess *Session, fn func(context.Context))
 	sess.mu.Lock()
 	if sess.running {
 		sess.mu.Unlock()
-		b.send(chatID, "⏳ Đang bận chạy lệnh khác. Gõ /cancel để hủy.", false)
+		b.send(chatID, b.t(chatID, "busy"), false)
 		return
 	}
 	var ctx context.Context
@@ -712,10 +753,10 @@ func (b *Bot) handle(u Update) {
 	// Kiểm soát quyền.
 	if !b.allowed[userID] {
 		if len(b.cfg.AllowedUserIDs) == 0 {
-			b.send(chatID, fmt.Sprintf("Bot chưa cấu hình allowlist.\nUser ID của bạn: <b>%d</b>\nThêm ID này vào \"allowed_user_ids\" rồi khởi động lại bot.", userID), true)
+			b.send(chatID, b.t(chatID, "no.allowlist", userID), true)
 		} else {
 			log.Printf("từ chối user %d (@%s)", userID, msg.From.Username)
-			b.send(chatID, "⛔ Bạn không có quyền dùng bot này.", false)
+			b.send(chatID, b.t(chatID, "denied"), false)
 		}
 		return
 	}
@@ -733,12 +774,12 @@ func (b *Bot) handle(u Update) {
 
 	switch cmd {
 	case "/start", "/help":
-		b.send(chatID, b.helpText(), true)
+		b.send(chatID, b.helpText(chatID), true)
 		return
 
 	// Mọi thứ "xem trạng thái" gom về /status (/pwd là tên gọi quen tay).
 	case "/status", "/mode", "/st", "/pwd":
-		b.send(chatID, b.statusText(sess), true)
+		b.send(chatID, b.statusText(chatID, sess), true)
 		return
 
 	case "/cancel", "/stop":
@@ -747,9 +788,9 @@ func (b *Bot) handle(u Update) {
 		sess.mu.Unlock()
 		if c != nil {
 			c()
-			b.send(chatID, "🛑 Đang hủy…", false)
+			b.send(chatID, b.t(chatID, "cancelling"), false)
 		} else {
-			b.send(chatID, "Không có lệnh nào đang chạy.", false)
+			b.send(chatID, b.t(chatID, "nothing.running"), false)
 		}
 		return
 
@@ -760,7 +801,7 @@ func (b *Bot) handle(u Update) {
 		sess.claudeMode = false
 		sess.permMode = ""
 		sess.mu.Unlock()
-		b.send(chatID, "🔄 Đã đóng phiên Claude, về chế độ shell và quyền theo config.\nThư mục làm việc trở về 📁 "+b.cfg.StartDir+" (không xóa gì trên đĩa).", false)
+		b.send(chatID, b.t(chatID, "reset.done", b.cfg.StartDir), false)
 		return
 
 	// /sh <lệnh> chạy shell; /sh không tham số = chuyển sang chế độ shell.
@@ -769,7 +810,7 @@ func (b *Bot) handle(u Update) {
 			sess.mu.Lock()
 			sess.claudeMode = false
 			sess.mu.Unlock()
-			b.send(chatID, "🖥️ Chế độ shell — gửi lệnh bất kỳ. /c để sang Claude.", false)
+			b.send(chatID, b.t(chatID, "mode.shell"), false)
 			return
 		}
 		b.execGuarded(chatID, sess, func(ctx context.Context) { b.runShell(ctx, chatID, sess, arg) })
@@ -784,7 +825,7 @@ func (b *Bot) handle(u Update) {
 		sess.claudeMode = true
 		sess.mu.Unlock()
 		if arg == "" {
-			b.send(chatID, "🤖 Chế độ Claude — gửi prompt bất kỳ.\n/sh để sang shell · /session để xem phiên · /perm để đổi quyền.", false)
+			b.send(chatID, b.t(chatID, "mode.claude"), false)
 			return
 		}
 		b.execGuarded(chatID, sess, func(ctx context.Context) { b.runClaude(ctx, chatID, sess, textPrompt(arg)) })
@@ -798,12 +839,21 @@ func (b *Bot) handle(u Update) {
 		b.sessionCmd(chatID, sess, cmd, arg)
 		return
 
+	case "/lang", "/language":
+		if arg == "" {
+			text, kb := b.langStatus(chatID)
+			b.sendText(chatID, text, true, kb)
+			return
+		}
+		b.applyLang(chatID, arg)
+		return
+
 	case "/perm", "/permission":
 		if !b.requireClaude(chatID) {
 			return
 		}
 		if arg == "" {
-			text, kb := b.permStatus(sess)
+			text, kb := b.permStatus(chatID, sess)
 			b.sendText(chatID, text, true, kb)
 			return
 		}
@@ -827,13 +877,13 @@ func (b *Bot) requireClaude(chatID int64) bool {
 	if b.cfg.ClaudeEnabled {
 		return true
 	}
-	b.send(chatID, "Claude chưa được bật trong cấu hình (claude_enabled=false).", false)
+	b.send(chatID, b.t(chatID, "claude.disabled"), false)
 	return false
 }
 
 // statusText: một chỗ xem toàn bộ trạng thái — chế độ shell/claude, thư mục,
 // và phiên Claude đang mở (kèm chế độ quyền của chính phiên đó).
-func (b *Bot) statusText(sess *Session) string {
+func (b *Bot) statusText(chatID int64, sess *Session) string {
 	sess.mu.Lock()
 	cwd, claudeMode, cs, def := sess.cwd, sess.claudeMode, sess.claude, sess.permMode
 	sess.mu.Unlock()
@@ -846,23 +896,20 @@ func (b *Bot) statusText(sess *Session) string {
 	}
 
 	var sb strings.Builder
-	fmt.Fprintf(&sb, "🖥️ <b>%s</b> · chế độ: <b>%s</b>\n📁 <code>%s</code>\n",
-		htmlEscape(b.hostname), m, htmlEscape(cwd))
+	sb.WriteString(b.t(chatID, "status.head", htmlEscape(b.hostname), m, htmlEscape(cwd)))
 	if !b.cfg.ClaudeEnabled {
-		sb.WriteString("🤖 Claude: ❌ chưa bật trong cấu hình")
+		sb.WriteString(b.t(chatID, "status.claude.off"))
 		return sb.String()
 	}
 	if cs != nil && cs.alive() {
-		fmt.Fprintf(&sb, "🤖 Phiên: %s", htmlEscape(cs.describe()))
+		sb.WriteString(b.t(chatID, "status.session", htmlEscape(cs.describe(b.lang(chatID)))))
 		if cs.cwd != cwd {
-			fmt.Fprintf(&sb, "\n⚠️ Phiên đang ở 📁 <code>%s</code> — /newchat để mở lại ở thư mục hiện tại.",
-				htmlEscape(cs.cwd))
+			sb.WriteString(b.t(chatID, "status.cwd.drift", htmlEscape(cs.cwd)))
 		}
 	} else {
-		fmt.Fprintf(&sb, "🤖 Phiên: chưa mở · quyền <b>%s</b> sẽ áp khi mở",
-			htmlEscape(normPermMode(def)))
+		sb.WriteString(b.t(chatID, "status.no.session", htmlEscape(normPermMode(def))))
 	}
-	sb.WriteString("\n\n/perm đổi quyền · /session đổi phiên · /session new mở phiên mới")
+	sb.WriteString(b.t(chatID, "status.footer"))
 	return sb.String()
 }
 
@@ -873,7 +920,7 @@ func (b *Bot) handleCallback(q *callbackQuery) {
 		return
 	}
 	if !b.allowed[q.From.ID] {
-		b.answerCallback(q.ID, "⛔ Bạn không có quyền dùng bot này.")
+		b.answerCallback(q.ID, b.t(q.Message.Chat.ID, "denied"))
 		return
 	}
 	chatID := q.Message.Chat.ID
@@ -883,6 +930,12 @@ func (b *Bot) handleCallback(q *callbackQuery) {
 	if len(parts) == 2 && parts[0] == "pm" {
 		b.answerCallback(q.ID, parts[1])
 		b.setPermMode(chatID, b.session(chatID), parts[1])
+		return
+	}
+	// lg|<code>: đổi ngôn ngữ.
+	if len(parts) == 2 && parts[0] == "lg" {
+		b.answerCallback(q.ID, parts[1])
+		b.applyLang(chatID, parts[1])
 		return
 	}
 	if len(parts) != 3 || parts[0] != "ca" {
@@ -904,51 +957,50 @@ func (b *Bot) handleCallback(q *callbackQuery) {
 	cs := sess.claude
 	sess.mu.Unlock()
 	if cs == nil || !cs.decide(parts[2], dec) {
-		b.answerCallback(q.ID, "Yêu cầu này không còn chờ trả lời nữa.")
+		b.answerCallback(q.ID, b.t(chatID, "cb.stale"))
 		return
 	}
 	log.Printf("quyền: chat %d, user %d -> %s (always=%v)", chatID, q.From.ID, dec.behavior, dec.always)
-	b.answerCallback(q.ID, verdictLine(dec))
+	b.answerCallback(q.ID, verdictLine(b.lang(chatID), dec))
 }
 
-func (b *Bot) helpText() string {
-	claudeLine := "❌ chưa bật"
+func (b *Bot) helpText(chatID int64) string {
+	claudeLine := b.t(chatID, "help.claude.off")
 	if b.cfg.ClaudeEnabled {
-		claudeLine = "✅ đã bật"
+		claudeLine = b.t(chatID, "help.claude.on")
 	}
-	return fmt.Sprintf(`<b>telegram-terminal</b> @ <b>%s</b>
+	return b.t(chatID, "help.text", b.hostname, claudeLine, languageCodes(), b.cfg.claudeAskTimeout())
+}
 
-Gửi bất kỳ dòng nào = chạy theo chế độ hiện tại (shell hoặc Claude).
-Claude: %s
+// langStatus dựng nội dung + nút cho lệnh /lang.
+func (b *Bot) langStatus(chatID int64) (string, []byte) {
+	cur := b.lang(chatID)
+	var sb strings.Builder
+	sb.WriteString(b.t(chatID, "lang.head", htmlEscape(cur.Native)))
+	sb.WriteString("\n\n")
+	var row []ikButton
+	for _, l := range languages {
+		mark, label := "•", l.Native
+		if l.Code == cur.Code {
+			mark, label = "✅", "✅ "+label
+		}
+		fmt.Fprintf(&sb, "%s <code>%s</code> — %s\n", mark, l.Code, htmlEscape(l.Native))
+		row = append(row, ikButton{Text: label, Data: "lg|" + l.Code})
+	}
+	sb.WriteString(b.t(chatID, "lang.hint"))
+	return sb.String(), inlineKeyboard(row)
+}
 
-<b>Chạy việc</b>
-/sh &lt;lệnh&gt; — chạy shell; <code>/sh</code> trống = chuyển sang chế độ shell
-/c &lt;prompt&gt; — hỏi Claude; <code>/c</code> trống = chuyển sang chế độ Claude
-/cancel — hủy lệnh / lượt Claude đang chạy
-
-<b>Ảnh &amp; file</b>
-Đang ở chế độ Claude thì gửi thẳng ảnh vào chat — caption chính là prompt (gửi
-nhiều ảnh một lần cũng được, bot gom thành một lượt). Ảnh được nhúng trực tiếp
-vào lượt nên Claude thấy ngay, không cần xin quyền. File không phải ảnh (hoặc
-ảnh quá lớn) thì bot lưu ra đĩa và đưa đường dẫn để Claude tự đọc.
-
-<b>Phiên Claude</b>
-/session — liệt kê phiên đã lưu ở thư mục hiện tại
-/session &lt;số|id&gt; — mở lại một phiên trong danh sách
-/session new — đóng phiên hiện tại, mở phiên mới ở thư mục hiện tại
-
-<b>Cấu hình phiên</b>
-/perm [chế độ] — đổi quyền: manual, acceptEdits, auto, dontAsk, plan…
-/status — xem chế độ, thư mục, phiên Claude &amp; quyền
-/reset — về thư mục mặc định, chế độ shell, quyền theo config &amp; đóng phiên
-/help — trợ giúp
-
-Câu trả lời của Claude được stream về theo thời gian thực. Khi cần chạy tool mà
-chưa có quyền, bot gửi tin kèm nút <b>Cho phép</b> / <b>Từ chối</b> / <b>Cho
-phép luôn</b> (tự động từ chối sau %d giây nếu không ai bấm).
-
-<i>Tên gọi khác:</i> /shell=/sh · /claude=/c · /sessions,/ss,/newchat,/resume,/r=/session · /mode,/st,/pwd=/status · /stop=/cancel · /permission=/perm`,
-		b.hostname, claudeLine, b.cfg.claudeAskTimeout())
+// applyLang đổi ngôn ngữ của chat. Giữ qua /reset vì đây là lựa chọn của người dùng.
+func (b *Bot) applyLang(chatID int64, code string) {
+	l := languageByCode(code)
+	if l == nil {
+		b.send(chatID, b.t(chatID, "lang.invalid", htmlEscape(code), languageCodes()), true)
+		return
+	}
+	b.setLang(chatID, l.Code)
+	log.Printf("language: chat %d -> %s", chatID, l.Code)
+	b.send(chatID, b.t(chatID, "lang.changed", htmlEscape(l.Native)), true)
 }
 
 // -------------------------------- Loop --------------------------------
@@ -960,7 +1012,7 @@ func (b *Bot) run() {
 	for {
 		select {
 		case <-ctx.Done():
-			log.Println("đang tắt…")
+			log.Println("shutting down…")
 			return
 		default:
 		}
@@ -1052,7 +1104,7 @@ func splitByCost(s string, max int, cost func(rune) int) []string {
 // -------------------------------- main --------------------------------
 
 func main() {
-	cfgPath := flag.String("config", "", "đường dẫn file config JSON")
+	cfgPath := flag.String("config", "", "path to the JSON config file")
 	flag.Parse()
 
 	cfg, err := loadConfig(*cfgPath)
@@ -1060,16 +1112,16 @@ func main() {
 		log.Fatalf("config: %v", err)
 	}
 	if cfg.BotToken == "" {
-		log.Fatal("bot_token chưa được cấu hình (dùng file config hoặc biến môi trường TT_BOT_TOKEN)")
+		log.Fatal("bot_token is not configured (use the config file or the TT_BOT_TOKEN env var)")
 	}
 
 	cleanupAttachments(cfg.imageDir(), cfg.imageKeepHours())
 
 	b := newBot(cfg)
-	log.Printf("telegram-terminal khởi động trên host %q — %d user được phép, claude=%v, ảnh lưu ở %s",
-		b.hostname, len(cfg.AllowedUserIDs), cfg.ClaudeEnabled, cfg.imageDir())
+	log.Printf("telegram-terminal started on host %q — %d allowed user(s), claude=%v, lang=%s, attachments in %s",
+		b.hostname, len(cfg.AllowedUserIDs), cfg.ClaudeEnabled, cfg.language().Code, cfg.imageDir())
 	if len(cfg.AllowedUserIDs) == 0 {
-		log.Println("CẢNH BÁO: allowlist trống — bot sẽ trả về User ID cho bất kỳ ai nhắn, nhưng KHÔNG chạy lệnh cho tới khi bạn thêm ID.")
+		log.Println("WARNING: the allowlist is empty — the bot replies with the sender's User ID but will NOT run anything until you add an ID.")
 	}
 	b.run()
 }

@@ -235,9 +235,9 @@ func (b *Bot) startClaude(chatID int64, cwd, resumeID, mode string) (*claudeSess
 	}
 	s.mu.Unlock()
 	if resumeID != "" {
-		log.Printf("claude: mở lại phiên %s cho chat %d (cwd=%s)", resumeID, chatID, cwd)
+		log.Printf("claude: resumed session %s for chat %d (cwd=%s)", resumeID, chatID, cwd)
 	} else {
-		log.Printf("claude: phiên mới cho chat %d (cwd=%s)", chatID, cwd)
+		log.Printf("claude: new session for chat %d (cwd=%s)", chatID, cwd)
 	}
 	return s, nil
 }
@@ -311,7 +311,7 @@ func (s *claudeSession) stderrTail() string {
 		if s.waitErr != nil {
 			return s.waitErr.Error()
 		}
-		return "không có stderr"
+		return s.b.t(s.chatID, "err.no.stderr")
 	}
 	return t
 }
@@ -357,15 +357,15 @@ func (s *claudeSession) sendControl(subtype string, extra map[string]any, timeou
 	case r := <-ch:
 		if r.subtype == "error" {
 			if r.errText == "" {
-				r.errText = subtype + " thất bại"
+				r.errText = s.b.t(s.chatID, "err.ctl.failed", subtype)
 			}
 			return nil, fmt.Errorf("%s", r.errText)
 		}
 		return r.payload, nil
 	case <-s.exited:
-		return nil, fmt.Errorf("claude đã thoát: %s", s.stderrTail())
+		return nil, fmt.Errorf("%s", s.b.t(s.chatID, "err.exited", s.stderrTail()))
 	case <-time.After(timeout):
-		return nil, fmt.Errorf("claude không phản hồi %s", subtype)
+		return nil, fmt.Errorf("%s", s.b.t(s.chatID, "err.no.reply", subtype))
 	}
 }
 
@@ -391,19 +391,19 @@ func (s *claudeSession) setPermMode(mode string) error {
 
 // describe: mô tả ngắn phiên (id · model · quyền) cho /status. Phiên mới chưa
 // chạy lượt nào thì chưa có id — claude chỉ cấp id ở system/init.
-func (s *claudeSession) describe() string {
+func (s *claudeSession) describe(l *language) string {
 	s.mu.Lock()
 	sid, model, mode := s.sessID, s.model, s.permMode
 	s.mu.Unlock()
 	if sid == "" {
-		sid = "mới (chưa có id)"
+		sid = l.t("session.no.id")
 	} else {
 		sid = shortID(sid)
 	}
 	if model != "" {
 		sid += " · " + model
 	}
-	return sid + " · quyền " + mode
+	return sid + " · " + l.t("session.permission", mode)
 }
 
 // curPermMode: chế độ quyền phiên đang chạy.
@@ -420,7 +420,7 @@ func (s *claudeSession) sendPrompt(ctx context.Context, p prompt) error {
 	s.mu.Lock()
 	if s.turn != nil {
 		s.mu.Unlock()
-		return fmt.Errorf("phiên claude đang chạy lượt khác")
+		return fmt.Errorf("%s", s.b.t(s.chatID, "err.busy.turn"))
 	}
 	s.turn = turn
 	s.turnSent = false
@@ -428,7 +428,7 @@ func (s *claudeSession) sendPrompt(ctx context.Context, p prompt) error {
 
 	msg := map[string]any{
 		"type":    "user",
-		"message": map[string]any{"role": "user", "content": p.claudeContent()},
+		"message": map[string]any{"role": "user", "content": p.claudeContent(s.b.lang(s.chatID))},
 	}
 	if err := s.writeJSON(msg); err != nil {
 		s.endTurn()
@@ -438,7 +438,7 @@ func (s *claudeSession) sendPrompt(ctx context.Context, p prompt) error {
 	select {
 	case <-turn:
 		if !s.alive() {
-			return fmt.Errorf("claude đã thoát: %s", s.stderrTail())
+			return fmt.Errorf("%s", s.b.t(s.chatID, "err.exited", s.stderrTail()))
 		}
 		return nil
 	case <-ctx.Done():
@@ -447,7 +447,7 @@ func (s *claudeSession) sendPrompt(ctx context.Context, p prompt) error {
 			"request_id": fmt.Sprintf("int-%d", time.Now().UnixNano()),
 			"request":    map[string]any{"subtype": "interrupt", "cancel_queued": true},
 		})
-		s.denyAllPending("đã hủy")
+		s.denyAllPending(s.b.t(s.chatID, "note.cancelled"))
 		select {
 		case <-turn:
 		case <-s.exited:
@@ -500,7 +500,7 @@ func (s *claudeSession) readLoop(r io.ReadCloser) {
 				log.Printf("claude stdout (chat %d): %v", s.chatID, err)
 			}
 			s.live.close()
-			s.denyAllPending("claude đã thoát")
+			s.denyAllPending(s.b.t(s.chatID, "note.exited"))
 			return
 		}
 	}
@@ -522,7 +522,7 @@ func readJSONLine(br *bufio.Reader) ([]byte, error) {
 func (s *claudeSession) dispatch(line []byte) {
 	var e ccEnvelope
 	if err := json.Unmarshal(line, &e); err != nil {
-		log.Printf("claude: dòng không phải JSON: %s", truncStr(string(line), 200))
+		log.Printf("claude: stdout line is not JSON: %s", truncStr(string(line), 200))
 		return
 	}
 	switch e.Type {
@@ -616,7 +616,7 @@ func (s *claudeSession) onToolResult(e ccEnvelope) {
 		}
 		s.live.close()
 		s.markSent()
-		s.b.send(s.chatID, "⚠️ tool lỗi:\n<pre>"+htmlEscape(truncStr(contentText(blk.Content), 500))+"</pre>", true)
+		s.b.send(s.chatID, s.b.t(s.chatID, "claude.tool.error")+"\n<pre>"+htmlEscape(truncStr(contentText(blk.Content), 500))+"</pre>", true)
 	}
 }
 
@@ -630,7 +630,7 @@ func (s *claudeSession) onResult(e ccEnvelope) {
 	if e.IsError || (e.Subtype != "" && e.Subtype != "success") {
 		parts = append(parts, "⚠️ "+e.Subtype)
 	} else if !s.sentAnything() {
-		parts = append(parts, "✓ (Claude không trả về nội dung)")
+		parts = append(parts, s.b.t(s.chatID, "claude.no.content"))
 	}
 	if e.Duration > 0 {
 		parts = append(parts, fmt.Sprintf("%.1fs", float64(e.Duration)/1000))
@@ -682,7 +682,7 @@ func (s *claudeSession) onControlRequest(e ccEnvelope) {
 		"response": map[string]any{
 			"subtype":    "error",
 			"request_id": e.RequestID,
-			"error":      "telegram-terminal không hỗ trợ " + req.Subtype,
+			"error":      s.b.t(s.chatID, "err.unsupported", req.Subtype),
 		},
 	})
 }
@@ -708,22 +708,22 @@ func (s *claudeSession) handleAsk(reqID string, raw json.RawMessage) {
 		name = req.DisplayName
 	}
 	timeout := time.Duration(s.b.cfg.claudeAskTimeout()) * time.Second
-	text := "🔐 Claude xin phép dùng " + toolEmoji(name) + " <b>" + htmlEscape(name) + "</b>"
+	text := s.b.t(s.chatID, "ask.head", toolEmoji(name), htmlEscape(name))
 	if req.Description != "" {
 		text += "\n" + htmlEscape(truncStr(req.Description, 200))
 	}
 	if d := toolDetail(req.ToolName, req.Input); d != "" {
 		text += "\n<pre>" + htmlEscape(truncStr(d, toolDetailMax)) + "</pre>"
 	}
-	text += fmt.Sprintf("\n<i>tự động từ chối sau %.0f phút</i>", timeout.Minutes())
+	text += s.b.t(s.chatID, "ask.timeout.note", timeout.Minutes())
 
 	hasSugg := len(bytes.TrimSpace(req.Suggestions)) > 2 // không phải null/[]
 	rows := [][]ikButton{{
-		{Text: "✅ Cho phép", Data: "ca|a|" + reqID},
-		{Text: "❌ Từ chối", Data: "ca|d|" + reqID},
+		{Text: s.b.t(s.chatID, "btn.allow"), Data: "ca|a|" + reqID},
+		{Text: s.b.t(s.chatID, "btn.deny"), Data: "ca|d|" + reqID},
 	}}
 	if hasSugg {
-		rows = append(rows, []ikButton{{Text: "⏩ Cho phép luôn (phiên này)", Data: "ca|A|" + reqID}})
+		rows = append(rows, []ikButton{{Text: s.b.t(s.chatID, "btn.always"), Data: "ca|A|" + reqID}})
 	}
 	msgID := s.b.sendText(s.chatID, text, true, inlineKeyboard(rows...))
 	s.markSent()
@@ -732,7 +732,7 @@ func (s *claudeSession) handleAsk(reqID string, raw json.RawMessage) {
 	select {
 	case dec = <-ask.ch:
 	case <-time.After(timeout):
-		dec = permDecision{behavior: "deny", note: "hết thời gian chờ"}
+		dec = permDecision{behavior: "deny", note: s.b.t(s.chatID, "note.timeout")}
 	case <-s.exited:
 		s.clearAsk(reqID)
 		return
@@ -741,14 +741,14 @@ func (s *claudeSession) handleAsk(reqID string, raw json.RawMessage) {
 
 	if dec.canceled {
 		if msgID != 0 {
-			s.b.editText(s.chatID, msgID, text+"\n\n🔕 Yêu cầu đã được rút lại.", true, emptyKeyboard())
+			s.b.editText(s.chatID, msgID, text+s.b.t(s.chatID, "ask.withdrawn"), true, emptyKeyboard())
 		}
 		return
 	}
 
 	resp := map[string]any{"behavior": dec.behavior}
 	if dec.behavior == "deny" {
-		m := "Người dùng từ chối qua Telegram"
+		m := s.b.t(s.chatID, "deny.reason")
 		if dec.note != "" {
 			m += " (" + dec.note + ")"
 		}
@@ -765,10 +765,10 @@ func (s *claudeSession) handleAsk(reqID string, raw json.RawMessage) {
 			"response":   resp,
 		},
 	}); err != nil {
-		log.Printf("claude: trả lời quyền lỗi: %v", err)
+		log.Printf("claude: answering the permission request failed: %v", err)
 	}
 	if msgID != 0 {
-		s.b.editText(s.chatID, msgID, text+"\n\n"+verdictLine(dec), true, emptyKeyboard())
+		s.b.editText(s.chatID, msgID, text+"\n\n"+verdictLine(s.b.lang(s.chatID), dec), true, emptyKeyboard())
 	}
 }
 
@@ -806,16 +806,16 @@ func (s *claudeSession) denyAllPending(note string) {
 	}
 }
 
-func verdictLine(d permDecision) string {
+func verdictLine(l *language, d permDecision) string {
 	switch {
 	case d.behavior == "allow" && d.always:
-		return "⏩ Đã cho phép (ghi nhớ cho phiên này)."
+		return l.t("verdict.always")
 	case d.behavior == "allow":
-		return "✅ Đã cho phép."
+		return l.t("verdict.allow")
 	case d.note != "":
-		return "❌ Đã từ chối — " + d.note + "."
+		return l.t("verdict.deny.why", d.note)
 	default:
-		return "❌ Đã từ chối."
+		return l.t("verdict.deny")
 	}
 }
 
@@ -824,18 +824,18 @@ func verdictLine(d permDecision) string {
 func (b *Bot) runClaude(ctx context.Context, chatID int64, sess *Session, p prompt) {
 	cs, err := b.claudeFor(chatID, sess)
 	if err != nil {
-		b.send(chatID, "⚠️ claude: "+err.Error()+"\n(kiểm tra: đã cài `claude` và đăng nhập cho user này chưa?)", false)
+		b.send(chatID, b.t(chatID, "claude.start.error", err.Error()), false)
 		return
 	}
 	err = cs.sendPrompt(ctx, p)
 	switch {
 	case err == nil:
 	case ctx.Err() == context.DeadlineExceeded:
-		b.send(chatID, "⏱️ Claude hết thời gian, đã hủy.", false)
+		b.send(chatID, b.t(chatID, "claude.timeout"), false)
 	case ctx.Err() == context.Canceled:
-		b.send(chatID, "🛑 Đã hủy.", false)
+		b.send(chatID, b.t(chatID, "claude.cancelled"), false)
 	default:
-		b.send(chatID, "⚠️ claude: "+err.Error(), false)
+		b.send(chatID, b.t(chatID, "claude.error", err.Error()), false)
 		b.stopClaude(sess) // dọn phiên hỏng, prompt sau sẽ khởi động lại
 	}
 }
@@ -992,31 +992,20 @@ func toolDetail(name string, input json.RawMessage) string {
 // Lưu ý: cờ --permission-mode gọi chế độ mặc định là "manual", còn
 // control_request set_permission_mode gọi chính nó là "default".
 
-var permModes = []struct{ Name, Desc string }{
-	{"manual", "hỏi mọi thứ cần quyền (mặc định)"},
-	{"acceptEdits", "tự cho sửa file, tool khác vẫn hỏi"},
-	{"auto", "để model tự phán cho phép/từ chối"},
-	{"dontAsk", "không hỏi; cái chưa được cho phép trước thì từ chối"},
-	{"plan", "chỉ lập kế hoạch, không thao tác"},
-	{"bypassPermissions", "bỏ qua mọi kiểm tra (cần claude_args [\"--dangerously-skip-permissions\"])"},
-}
+// permModes: tên chế độ; mô tả nằm trong catalog theo key "perm.desc.<tên>".
+var permModes = []string{"manual", "acceptEdits", "auto", "dontAsk", "plan", "bypassPermissions"}
 
 func validPermMode(m string) bool {
-	for _, p := range permModes {
-		if p.Name == m {
+	for _, name := range permModes {
+		if name == m {
 			return true
 		}
 	}
 	return m == "default"
 }
 
-func permModeDesc(m string) string {
-	for _, p := range permModes {
-		if p.Name == normPermMode(m) {
-			return p.Desc
-		}
-	}
-	return ""
+func permModeDesc(l *language, m string) string {
+	return l.t("perm.desc." + normPermMode(m))
 }
 
 // normPermMode: tên dùng để hiển thị và lưu trong bot.
@@ -1055,7 +1044,7 @@ func (b *Bot) permModeFor(sess *Session) string {
 }
 
 // permStatus dựng nội dung + nút cho lệnh /perm.
-func (b *Bot) permStatus(sess *Session) (string, []byte) {
+func (b *Bot) permStatus(chatID int64, sess *Session) (string, []byte) {
 	sess.mu.Lock()
 	cs, def := sess.claude, sess.permMode
 	sess.mu.Unlock()
@@ -1069,32 +1058,33 @@ func (b *Bot) permStatus(sess *Session) (string, []byte) {
 		}
 	}
 
+	l := b.lang(chatID)
 	var sb strings.Builder
-	sb.WriteString("🔧 Chế độ quyền: <b>" + htmlEscape(cur) + "</b>")
+	sb.WriteString(l.t("perm.head", htmlEscape(cur)))
 	if live {
-		sb.WriteString(" (đang áp cho phiên đang mở)")
+		sb.WriteString(l.t("perm.live"))
 	} else {
-		sb.WriteString(" (sẽ áp cho phiên mở tiếp theo)")
+		sb.WriteString(l.t("perm.next"))
 	}
 	sb.WriteString("\n\n")
-	for _, p := range permModes {
+	for _, name := range permModes {
 		mark := "•"
-		if p.Name == cur {
+		if name == cur {
 			mark = "✅"
 		}
-		sb.WriteString(mark + " <b>" + p.Name + "</b> — " + htmlEscape(p.Desc) + "\n")
+		sb.WriteString(mark + " <b>" + name + "</b> — " + htmlEscape(permModeDesc(l, name)) + "\n")
 	}
-	sb.WriteString("\nBấm nút hoặc gõ <code>/perm &lt;tên&gt;</code>.")
+	sb.WriteString(l.t("perm.hint"))
 
 	var rows [][]ikButton
 	for i := 0; i < len(permModes); i += 2 {
 		var row []ikButton
-		for _, p := range permModes[i:min(i+2, len(permModes))] {
-			label := p.Name
-			if p.Name == cur {
+		for _, name := range permModes[i:min(i+2, len(permModes))] {
+			label := name
+			if name == cur {
 				label = "✅ " + label
 			}
-			row = append(row, ikButton{Text: label, Data: "pm|" + p.Name})
+			row = append(row, ikButton{Text: label, Data: "pm|" + name})
 		}
 		rows = append(rows, row)
 	}
@@ -1104,14 +1094,10 @@ func (b *Bot) permStatus(sess *Session) (string, []byte) {
 // setPermMode đổi chế độ quyền: áp ngay cho phiên đang mở (nếu có) rồi ghi làm
 // mặc định cho các phiên sau của chat này.
 func (b *Bot) setPermMode(chatID int64, sess *Session, mode string) {
+	l := b.lang(chatID)
 	mode = strings.TrimSpace(mode)
 	if !validPermMode(mode) {
-		var names []string
-		for _, p := range permModes {
-			names = append(names, p.Name)
-		}
-		b.send(chatID, "⚠️ chế độ không hợp lệ: "+htmlEscape(mode)+
-			"\nChọn một trong: <code>"+strings.Join(names, ", ")+"</code>", true)
+		b.send(chatID, l.t("perm.invalid", htmlEscape(mode), strings.Join(permModes, ", ")), true)
 		return
 	}
 	mode = normPermMode(mode)
@@ -1122,9 +1108,9 @@ func (b *Bot) setPermMode(chatID int64, sess *Session, mode string) {
 
 	if cs != nil && cs.alive() {
 		if err := cs.setPermMode(mode); err != nil {
-			msg := "⚠️ không đổi được chế độ: " + htmlEscape(err.Error())
+			msg := l.t("perm.failed", htmlEscape(err.Error()))
 			if mode == "bypassPermissions" {
-				msg += "\n\nMuốn dùng chế độ này thì đặt <code>\"claude_args\": [\"--dangerously-skip-permissions\"]</code> trong config rồi /newchat."
+				msg += l.t("perm.bypass.hint")
 			}
 			b.send(chatID, msg, true)
 			return
@@ -1134,10 +1120,9 @@ func (b *Bot) setPermMode(chatID int64, sess *Session, mode string) {
 	sess.permMode = mode
 	sess.mu.Unlock()
 
-	suffix := " (áp dụng cho phiên Claude tiếp theo)"
+	suffix := l.t("perm.changed.next")
 	if cs != nil && cs.alive() {
 		suffix = ""
 	}
-	b.send(chatID, "🔧 Chế độ quyền giờ là <b>"+htmlEscape(mode)+"</b> — "+
-		htmlEscape(permModeDesc(mode))+"."+suffix, true)
+	b.send(chatID, l.t("perm.changed", htmlEscape(mode), htmlEscape(permModeDesc(l, mode)))+suffix, true)
 }

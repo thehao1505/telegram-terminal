@@ -30,7 +30,7 @@ func TestPermModeNames(t *testing.T) {
 	if validPermMode("khong-ton-tai") {
 		t.Error("chế độ lạ phải bị coi là không hợp lệ")
 	}
-	if permModeDesc("auto") == "" {
+	if permModeDesc(langEN, "auto") == "" {
 		t.Error("thiếu mô tả cho auto")
 	}
 }
@@ -66,7 +66,7 @@ func TestPermModeQuaTelegram(t *testing.T) {
 		t.Errorf("chưa có phiên thì không được gửi set_permission_mode, đã gửi: %q", modes())
 	}
 	sent, _, _ := tg.all()
-	if !containsSub(sent, "phiên Claude tiếp theo") {
+	if !containsSub(sent, "next Claude session") {
 		t.Errorf("thiếu thông báo áp dụng cho phiên sau: %q", sent)
 	}
 
@@ -101,7 +101,7 @@ func TestPermModeQuaTelegram(t *testing.T) {
 	// 5) bypassPermissions bị claude từ chối -> báo lỗi, mặc định giữ nguyên.
 	b.handle(msgUpdate(t, "/perm bypassPermissions"))
 	sent, _, _ = tg.all()
-	if !containsSub(sent, "không đổi được chế độ") || !containsSub(sent, "dangerously-skip-permissions") {
+	if !containsSub(sent, "could not change the mode") || !containsSub(sent, "dangerously-skip-permissions") {
 		t.Errorf("chưa báo lỗi kèm gợi ý: %q", sent[len(sent)-1:])
 	}
 	if got := b.permModeFor(sess); got != "manual" {
@@ -115,14 +115,14 @@ func TestPermModeQuaTelegram(t *testing.T) {
 		t.Error("chế độ không hợp lệ vẫn bị gửi cho claude")
 	}
 	sent, _, _ = tg.all()
-	if !containsSub(sent, "chế độ không hợp lệ") {
+	if !containsSub(sent, "invalid mode") {
 		t.Errorf("chưa báo chế độ không hợp lệ: %q", sent)
 	}
 
 	// 7) /perm không tham số -> bảng trạng thái kèm nút.
 	b.handle(msgUpdate(t, "/perm"))
 	sent, _, _ = tg.all()
-	if !containsSub(sent, "Chế độ quyền:") || !containsSub(sent, "acceptEdits") {
+	if !containsSub(sent, "Permission mode:") || !containsSub(sent, "acceptEdits") {
 		t.Errorf("bảng /perm thiếu nội dung: %q", sent)
 	}
 }
@@ -163,7 +163,7 @@ func TestRealPermMode(t *testing.T) {
 		t.Errorf("acceptEdits mà vẫn không ghi được file: %v", err)
 	}
 	sent, _, _ := tg.all()
-	if containsSub(sent, "xin phép") {
+	if containsSub(sent, "asks to use") {
 		t.Errorf("acceptEdits mà vẫn hỏi quyền: %q", sent)
 	}
 	// Quay lại manual: trên dây phải là "default" và claude phải nhận.
@@ -199,7 +199,7 @@ func TestInitEchoDefaultMode(t *testing.T) {
 		t.Errorf("curPermMode() = %q, muốn manual", got)
 	}
 	// Chưa chạy lượt nào -> chưa có session id, và phải nói rõ chứ không để rỗng.
-	if got := cs.describe(); !strings.Contains(got, "mới (chưa có id)") {
+	if got := cs.describe(langEN); !strings.Contains(got, "new (no id yet)") {
 		t.Errorf("describe() = %q, muốn nói rõ là phiên mới", got)
 	}
 }
