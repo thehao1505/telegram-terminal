@@ -340,3 +340,86 @@ func TestRealClaudeEndToEnd(t *testing.T) {
 		}
 	}
 }
+
+func TestHumanDur(t *testing.T) {
+	cases := map[int64]string{
+		0: "0.0s", 1234: "1.2s", 59_900: "59.9s",
+		60_000: "1m00s", 1_000_800: "16m40s", 3_599_000: "59m59s",
+		3_600_000: "1h00m", 7_530_000: "2h05m",
+	}
+	for ms, want := range cases {
+		if got := humanDur(ms); got != want {
+			t.Errorf("humanDur(%d) = %q, muốn %q", ms, got, want)
+		}
+	}
+}
+
+// total_cost_usd là tổng cộng dồn của cả phiên; turnCost phải tách ra chi phí
+// của riêng lượt, và chịu được trường hợp tổng bị reset (/clear, resume).
+func TestTurnCost(t *testing.T) {
+	s := &claudeSession{}
+	steps := []struct {
+		total, wantTurn float64
+	}{
+		{0.10, 0.10}, // lượt đầu: cả tổng là của lượt này
+		{0.35, 0.25},
+		{0.35, 0.00}, // không tốn thêm
+		{0.05, 0.05}, // tổng nhỏ lại -> phiên đã reset, lấy nguyên tổng
+		{0.09, 0.04},
+	}
+	for i, st := range steps {
+		turn, running := s.turnCost(st.total)
+		if diff := turn - st.wantTurn; diff > 1e-9 || diff < -1e-9 {
+			t.Errorf("bước %d: turn = %.4f, muốn %.4f", i+1, turn, st.wantTurn)
+		}
+		if running != st.total {
+			t.Errorf("bước %d: running = %.4f, muốn %.4f", i+1, running, st.total)
+		}
+	}
+}
+
+// TestFooterCostDelta: lượt thứ hai phải hiện chi phí của riêng nó, kèm tổng
+// phiên có nhãn — chứ không in tổng cộng dồn như thể là giá của lượt đó.
+func TestFooterCostDelta(t *testing.T) {
+	bin := buildFakeClaude(t)
+	t.Setenv("TT_FAKE_DECISION", filepath.Join(t.TempDir(), "dec.json"))
+
+	tg := newTGMock()
+	defer tg.srv.Close()
+	b := tg.bot(Config{ClaudeEnabled: true, ClaudeBin: bin, StartDir: t.TempDir(), ClaudeAskTimeout: 1})
+	sess := b.session(1)
+	defer b.stopClaude(sess)
+
+	footer := func() string {
+		sent, _, _ := tg.all()
+		for i := len(sent) - 1; i >= 0; i-- {
+			if strings.HasPrefix(sent[i], "— ") {
+				return sent[i]
+			}
+		}
+		return ""
+	}
+
+	// Lượt 1: tổng == chi phí lượt -> không nêu tổng phiên.
+	b.runClaude(context.Background(), 1, sess, textPrompt("lần 1"))
+	first := footer()
+	if !strings.Contains(first, "$0.0042") || !strings.Contains(first, "1.2s") {
+		t.Fatalf("footer lượt 1 sai: %q", first)
+	}
+	if strings.Contains(first, "session") {
+		t.Errorf("lượt đầu không nên nêu tổng phiên: %q", first)
+	}
+	if !strings.Contains(first, "2 steps") {
+		t.Errorf("thiếu số bước: %q", first)
+	}
+
+	// Lượt 2: claude giả báo tổng 0.0084 -> lượt này chỉ 0.0042.
+	b.runClaude(context.Background(), 1, sess, textPrompt("lần 2"))
+	second := footer()
+	if !strings.Contains(second, "$0.0042") {
+		t.Errorf("footer lượt 2 phải là chi phí của riêng lượt: %q", second)
+	}
+	if !strings.Contains(second, "session $0.0084") {
+		t.Errorf("footer lượt 2 phải nêu tổng phiên: %q", second)
+	}
+}

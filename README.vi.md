@@ -31,6 +31,7 @@ máy nào cũng chạy, không cần cài runtime.
   - [Hai chế độ](#hai-chế-độ-shell-và-claude)
   - [Chế độ shell](#chế-độ-shell)
   - [Chế độ Claude](#chế-độ-claude)
+  - [Đọc dòng footer](#đọc-dòng-footer)
   - [Gửi ảnh & file](#gửi-ảnh--file)
   - [Quyền: `/perm`](#quyền-perm)
   - [Ngôn ngữ: `/lang`](#ngôn-ngữ-lang)
@@ -275,7 +276,7 @@ bot:  📖 Read
       /home/user/project/telegram-terminal/main.go
       ⏳ (chữ chảy dần vào một tin nhắn, sửa mỗi ~1,5s)
       Hàm dài nhất là handle() — khoảng 90 dòng…
-      — 7.4s · $0.0231
+      — 7.4s · $0.0231 · 3 bước
 ```
 
 Bạn sẽ thấy 4 loại tin nhắn:
@@ -285,7 +286,36 @@ Bạn sẽ thấy 4 loại tin nhắn:
 | Chữ chảy dần | Câu trả lời của Claude, gom vào **một** tin nhắn và sửa dần (~1,5s/lần). Dài quá 3500 ký tự thì tự mở tin mới |
 | `💻 Bash` / `✍️ Write` / `📖 Read` / `🔍 Grep` / `🌐 WebFetch` / `🤖 Task` … | Claude vừa gọi tool đó, kèm phần đáng đọc nhất (lệnh, đường dẫn, pattern…) |
 | `⚠️ tool lỗi:` | Tool chạy nhưng lỗi — tool thành công thì bot im lặng cho khỏi ồn |
-| `— 7.4s · $0.0231` | Kết thúc lượt: thời gian và chi phí |
+| `— 7.4s · $0.0231 · 3 bước` | Kết thúc lượt: xem [Đọc dòng footer](#đọc-dòng-footer) |
+
+### Đọc dòng footer
+
+```text
+— 16m41s · $0.87 · phiên $32.31 · 5 bước
+   │         │       │              └ số lượt model bên trong một prompt (num_turns)
+   │         │       └ tổng cộng dồn của cả tiến trình claude
+   │         └ chi phí của riêng prompt này
+   └ thời gian treo tường của lượt
+```
+
+Hai con số dễ đọc sai, nên bot tách rõ:
+
+- **Chi phí.** Event `result` của Claude Code trả `total_cost_usd` là **tổng cộng
+  dồn**: "cumulative across turns in streaming-input sessions — each result
+  carries the running total so far". Bot giữ một tiến trình `claude` sống lâu
+  cho mỗi chat, nên in thẳng con số đó thì prompt nào cũng trông như đắt dần.
+  Bot trừ tổng của lượt trước để ra chi phí từng lượt, và ghi tổng phiên riêng
+  kèm nhãn. Resume phiên hoặc `/clear` làm tổng reset — bot thấy tổng nhỏ lại
+  thì coi tổng mới là chi phí của lượt đó. Đây là số **ước tính** theo giá niêm
+  yết, không phải hóa đơn.
+- **Thời gian.** Là đồng hồ treo tường của lượt, nên **gồm cả thời gian chờ bạn
+  bấm Cho phép/Từ chối** — yêu cầu quyền xảy ra giữa lượt. Lượt 16 phút thường
+  nghĩa là nút bấm nằm đó không ai trả lời, chứ không phải model nghĩ lâu.
+  (Event có `duration_api_ms` nhưng nó cộng cả request song song nên có thể lớn
+  hơn wall-clock, bot không hiển thị.)
+
+Tổng phiên và số bước được bỏ đi khi chúng không nói thêm gì — tức lượt đầu của
+phiên, và prompt chỉ mất một lượt model.
 
 ### Gửi ảnh & file
 
@@ -294,7 +324,7 @@ Bạn sẽ thấy 4 loại tin nhắn:
 ```text
 bạn:  [ảnh screenshot lỗi]  caption: lỗi này do đâu?
 bot:  ⏳ Cái stack trace trong ảnh cho thấy nil pointer ở sessions.go:132…
-      — 5.1s · $0.0184
+      — 5.1s · $0.0184 · 2 bước
 ```
 
 - Ảnh được **nhúng trực tiếp** vào lượt (base64) nên Claude thấy ngay, không

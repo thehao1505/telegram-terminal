@@ -139,7 +139,8 @@ type claudeSession struct {
 	turn     chan struct{}             // đóng khi lượt hiện tại kết thúc
 	sessID   string
 	model    string
-	permMode string // chế độ quyền phiên này đang chạy
+	lastCost float64 // total_cost_usd của result trước (nó là tổng cộng dồn)
+	permMode string  // chế độ quyền phiên này đang chạy
 	waitErr  error
 	exited   chan struct{}
 
@@ -475,6 +476,7 @@ type ccEnvelope struct {
 	IsError   bool            `json:"is_error"`
 	Cost      float64         `json:"total_cost_usd"`
 	Duration  int64           `json:"duration_ms"`
+	NumTurns  int             `json:"num_turns"`
 }
 
 type ccBlock struct {
@@ -633,15 +635,40 @@ func (s *claudeSession) onResult(e ccEnvelope) {
 		parts = append(parts, s.b.t(s.chatID, "claude.no.content"))
 	}
 	if e.Duration > 0 {
-		parts = append(parts, fmt.Sprintf("%.1fs", float64(e.Duration)/1000))
+		parts = append(parts, humanDur(e.Duration))
 	}
 	if e.Cost > 0 {
-		parts = append(parts, fmt.Sprintf("$%.4f", e.Cost))
+		turn, total := s.turnCost(e.Cost)
+		parts = append(parts, fmt.Sprintf("$%.4f", turn))
+		// Chỉ nêu tổng phiên khi nó đã khác chi phí lượt này.
+		if total-turn > 0.00005 {
+			parts = append(parts, s.b.t(s.chatID, "result.session.cost", fmt.Sprintf("%.4f", total)))
+		}
+	}
+	if e.NumTurns > 1 {
+		parts = append(parts, s.b.t(s.chatID, "result.steps", e.NumTurns))
 	}
 	if len(parts) > 0 {
 		s.b.send(s.chatID, "— "+strings.Join(parts, " · "), false)
 	}
 	s.endTurn()
+}
+
+// turnCost tách chi phí của riêng lượt vừa xong ra khỏi total_cost_usd.
+//
+// Trong chế độ stream-json input, mỗi result mang TỔNG CỘNG DỒN của cả phiên
+// ("each result carries the running total so far"), nên phải trừ lần trước.
+// Phiên resume hoặc /clear giữa phiên làm tổng nhỏ lại — lúc đó tổng mới chính
+// là chi phí của lượt này.
+func (s *claudeSession) turnCost(total float64) (turn, running float64) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	turn = total - s.lastCost
+	if turn < 0 {
+		turn = total
+	}
+	s.lastCost = total
+	return turn, total
 }
 
 func (s *claudeSession) onControlResponse(e ccEnvelope) {
@@ -862,6 +889,20 @@ func (t *tailBuf) String() string {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	return string(t.buf)
+}
+
+// humanDur: 12.3s · 3m07s · 1h04m — lượt chờ người bấm nút có thể dài hàng chục
+// phút nên in bằng giây thì khó đọc.
+func humanDur(ms int64) string {
+	sec := int(ms / 1000)
+	switch {
+	case sec < 60:
+		return fmt.Sprintf("%.1fs", float64(ms)/1000)
+	case sec < 3600:
+		return fmt.Sprintf("%dm%02ds", sec/60, sec%60)
+	default:
+		return fmt.Sprintf("%dh%02dm", sec/3600, (sec%3600)/60)
+	}
 }
 
 func truncStr(s string, max int) string {

@@ -16,6 +16,9 @@ func out(v any) {
 	fmt.Println(string(data))
 }
 
+// turns đếm số lượt để total_cost_usd cộng dồn giống CLI thật.
+var turns int
+
 func main() {
 	// Ghi lại args để test kiểm tra bot có truyền --resume … hay không.
 	if f := os.Getenv("TT_FAKE_ARGS"); f != "" {
@@ -108,8 +111,11 @@ func main() {
 			if f := os.Getenv("TT_FAKE_DECISION"); f != "" {
 				os.WriteFile(f, m["response"], 0o600)
 			}
+			turns++
 			out(map[string]any{"type": "result", "subtype": "success", "is_error": false,
-				"duration_ms": 1234, "total_cost_usd": 0.0042, "result": "xong"})
+				"duration_ms": 1234, "num_turns": 2,
+				// Giống CLI thật: đây là TỔNG cộng dồn của cả phiên.
+				"total_cost_usd": 0.0042 * float64(turns), "result": "xong"})
 		}
 	}
 }

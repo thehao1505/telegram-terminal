@@ -32,6 +32,7 @@ binary**, copy it to any machine, no runtime to install.
   - [Two modes](#two-modes-shell-and-claude)
   - [Shell mode](#shell-mode)
   - [Claude mode](#claude-mode)
+  - [Reading the footer](#reading-the-footer)
   - [Sending photos & files](#sending-photos--files)
   - [Permissions: `/perm`](#permissions-perm)
   - [Language: `/lang`](#language-lang)
@@ -278,7 +279,7 @@ bot:  📖 Read
       /home/user/project/telegram-terminal/main.go
       ⏳ (text streams into one message, edited about every 1.5 s)
       The longest function is handle() — roughly 90 lines…
-      — 7.4s · $0.0231
+      — 7.4s · $0.0231 · 3 steps
 ```
 
 You will see four kinds of message:
@@ -288,7 +289,37 @@ You will see four kinds of message:
 | Streaming text | Claude's answer, collected into **one** message that is edited as it grows (~1.5 s per edit). Past 3500 characters it starts a new message |
 | `💻 Bash` / `✍️ Write` / `📖 Read` / `🔍 Grep` / `🌐 WebFetch` / `🤖 Task` … | Claude just called that tool, with the most useful part of the input (command, path, pattern…) |
 | `⚠️ tool error:` | The tool ran and failed. Successful tools stay silent to avoid noise |
-| `— 7.4s · $0.0231` | End of turn: duration and cost |
+| `— 7.4s · $0.0231 · 3 steps` | End of turn: see [Reading the footer](#reading-the-footer) |
+
+### Reading the footer
+
+```text
+— 16m41s · $0.87 · session $32.31 · 5 steps
+   │         │       │               └ model turns inside this one prompt (num_turns)
+   │         │       └ running total for the whole claude process
+   │         └ what this prompt cost on its own
+   └ wall-clock time of the turn
+```
+
+Two things are easy to misread, so the bot spells them out:
+
+- **Cost.** Claude Code's `result` event reports `total_cost_usd` as a *running
+  total*: "cumulative across turns in streaming-input sessions — each result
+  carries the running total so far". Since the bot keeps one long-lived `claude`
+  process per chat, printing that number raw makes every prompt look
+  progressively more expensive. The bot subtracts the previous total to get the
+  per-prompt cost and labels the running total separately. Resuming a session or
+  `/clear` resets the total; the bot notices the drop and treats the new total as
+  the turn's cost. It is Anthropic's own estimate at list prices, not a billing
+  statement.
+- **Duration.** This is the turn's wall clock, so it **includes the time the turn
+  spent waiting for you to tap Allow/Deny** — the permission request happens
+  mid-turn. A 16-minute turn usually means the buttons sat unanswered, not that
+  the model was thinking. (`duration_api_ms` exists in the event but sums
+  parallel requests, so it can exceed the wall clock and is not shown.)
+
+The session total and the step count are omitted when they add nothing — the
+first turn of a session, and prompts that took a single model turn.
 
 ### Sending photos & files
 
@@ -298,7 +329,7 @@ prompt**:
 ```text
 you:  [screenshot of an error]  caption: where does this come from?
 bot:  ⏳ The stack trace in the image points at a nil pointer in sessions.go:132…
-      — 5.1s · $0.0184
+      — 5.1s · $0.0184 · 2 steps
 ```
 
 - Images are **embedded directly** into the turn (base64), so Claude sees them
