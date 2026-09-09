@@ -755,7 +755,7 @@ func (b *Bot) handle(u Update) {
 		if len(b.cfg.AllowedUserIDs) == 0 {
 			b.send(chatID, b.t(chatID, "no.allowlist", userID), true)
 		} else {
-			log.Printf("từ chối user %d (@%s)", userID, msg.From.Username)
+			log.Printf("rejected user %d (@%s)", userID, msg.From.Username)
 			b.send(chatID, b.t(chatID, "denied"), false)
 		}
 		return
@@ -960,7 +960,7 @@ func (b *Bot) handleCallback(q *callbackQuery) {
 		b.answerCallback(q.ID, b.t(chatID, "cb.stale"))
 		return
 	}
-	log.Printf("quyền: chat %d, user %d -> %s (always=%v)", chatID, q.From.ID, dec.behavior, dec.always)
+	log.Printf("permission: chat %d, user %d -> %s (always=%v)", chatID, q.From.ID, dec.behavior, dec.always)
 	b.answerCallback(q.ID, verdictLine(b.lang(chatID), dec))
 }
 

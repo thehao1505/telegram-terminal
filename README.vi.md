@@ -595,7 +595,7 @@ Bot ghi log mỗi lần mở/resume phiên và mỗi lần bấm nút quyền:
 ```text
 claude: new session for chat 111111111 (cwd=/home/user)
 claude: resumed session e5f6a7b8-… for chat 111111111 (cwd=/home/user)
-quyền: chat 111111111, user 111111111 -> allow (always=true)
+permission: chat 111111111, user 111111111 -> allow (always=true)
 language: chat 111111111 -> vi
 ```
 
