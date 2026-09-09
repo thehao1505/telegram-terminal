@@ -447,6 +447,7 @@ Nếu chưa mở phiên nào: `🤖 Phiên: chưa mở · quyền manual sẽ á
 | Lệnh | Việc |
 |------|------|
 | *(gõ trực tiếp)* | Chạy theo chế độ hiện tại (shell hoặc Claude) |
+| *(gửi ảnh/file kèm caption)* | Chế độ Claude: ảnh vào thẳng lượt Claude, caption làm prompt. Chế độ shell: chỉ lưu và báo đường dẫn |
 | `/sh [lệnh]` | Chạy shell; `/sh` trống = chuyển sang chế độ shell |
 | `/c [prompt]` | Hỏi Claude; `/c` trống = chuyển sang chế độ Claude |
 | `/cancel` | Hủy lệnh shell / lượt Claude đang chạy |
@@ -457,7 +458,6 @@ Nếu chưa mở phiên nào: `🤖 Phiên: chưa mở · quyền manual sẽ á
 | `/status` | Xem chế độ, thư mục, phiên Claude & quyền |
 | `/reset` | Về thư mục mặc định, chế độ shell, quyền theo config & đóng phiên (không xóa gì trên đĩa) |
 | `/help` | Trợ giúp |
-| *(gửi ảnh/file kèm caption)* | Chế độ Claude: ảnh vào thẳng lượt Claude, caption làm prompt. Chế độ shell: chỉ lưu và báo đường dẫn |
 
 Tên gọi khác, giữ cho quen tay:
 
@@ -507,6 +507,16 @@ cd /duong/dan/du-an
 tiếp tục phần còn lại giúp tôi
 ```
 
+**Gửi screenshot lỗi để Claude đọc giúp**
+
+```text
+/c                          → chắc chắn đang ở chế độ Claude
+[gửi ảnh]  caption: lỗi này ở đâu ra, sửa thế nào?
+                            → ảnh nhúng thẳng vào lượt, không cần cho quyền tool
+[gửi 3 ảnh một lần]  caption: 3 màn hình này khác nhau chỗ nào?
+                            → bot gom ~1,4s thành một lượt duy nhất
+```
+
 **Việc dài, chạy rồi đi làm việc khác**
 
 ```text
@@ -533,6 +543,10 @@ tiếp tục phần còn lại giúp tôi
 | Đổi config mà không thấy khác gì | Chưa `sudo systemctl restart telegram-terminal` |
 | `Failed to execute …: Exec format error`, `status=203/EXEC`, service restart liên tục | Binary sai kiến trúc CPU. So `uname -m` với `file /usr/local/bin/telegram-terminal`, rồi build lại đúng `GOARCH` (xem mục Build) |
 | `status=203/EXEC` nhưng đúng kiến trúc | File bị hỏng/thiếu khi truyền. Đối chiếu `sha256sum` hai đầu |
+| `⚠️ Chưa hỗ trợ gửi … cho Claude` | Video, GIF động, voice, audio. Chỉ ảnh và document được hỗ trợ |
+| `⚠️ không tải được file: file lớn hơn 20.0 MB` | Giới hạn của Bot API, không phải của bot này. Nén nhỏ lại, hoặc `scp` lên máy rồi nhờ Claude đọc theo đường dẫn |
+| `📎 Đã lưu … Đang ở chế độ shell nên chưa gửi cho Claude` | Gửi ảnh khi đang ở chế độ shell. Gõ `/c` rồi gửi lại |
+| `📎 … lớn hơn giới hạn nhúng` | Ảnh vượt `image_max_bytes`; Claude sẽ đọc bằng tool `Read` (phải cho quyền). Tăng `image_max_bytes` nếu muốn nhúng ảnh to hơn — tối đa ~3,7 MB vì API Claude chặn ở 5 MB sau khi base64 |
 
 Xem log:
 
