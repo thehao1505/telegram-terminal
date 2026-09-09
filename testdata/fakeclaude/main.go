@@ -74,6 +74,10 @@ func main() {
 			}})
 
 		case "user":
+			// Ghi lại nguyên văn message để test kiểm tra content block (ảnh…).
+			if f := os.Getenv("TT_FAKE_MESSAGE"); f != "" {
+				os.WriteFile(f, m["message"], 0o600)
+			}
 			out(map[string]any{"type": "system", "subtype": "init",
 				"session_id": "sess-123", "model": "fake-model"})
 			for _, t := range []string{"Xin ", "chào ", "bạn"} {
@@ -81,6 +85,12 @@ func main() {
 					"type": "content_block_delta", "index": 0,
 					"delta": map[string]any{"type": "text_delta", "text": t},
 				}})
+			}
+			// TT_FAKE_NOASK: kết thúc lượt ngay, không gọi tool / không xin quyền.
+			if os.Getenv("TT_FAKE_NOASK") != "" {
+				out(map[string]any{"type": "result", "subtype": "success", "is_error": false,
+					"duration_ms": 12, "result": "xong"})
+				continue
 			}
 			out(map[string]any{"type": "assistant", "message": map[string]any{
 				"role": "assistant",

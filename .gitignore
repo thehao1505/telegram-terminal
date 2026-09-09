@@ -1,3 +1,7 @@
 # Cấu hình thật — chứa bot_token, không đưa lên git.
 # Dùng config.example.json làm mẫu.
 config.json
+
+# Binary build cho kiến trúc khác (install.sh sinh ra) và thư mục phát hành.
+/telegram-terminal.*
+/dist/

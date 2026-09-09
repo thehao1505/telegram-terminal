@@ -415,7 +415,7 @@ func (s *claudeSession) curPermMode() string {
 
 // sendPrompt gửi 1 prompt và chờ hết lượt (event "result"). Hủy ctx -> gửi
 // interrupt cho claude, hết kiên nhẫn thì kill.
-func (s *claudeSession) sendPrompt(ctx context.Context, prompt string) error {
+func (s *claudeSession) sendPrompt(ctx context.Context, p prompt) error {
 	turn := make(chan struct{})
 	s.mu.Lock()
 	if s.turn != nil {
@@ -428,7 +428,7 @@ func (s *claudeSession) sendPrompt(ctx context.Context, prompt string) error {
 
 	msg := map[string]any{
 		"type":    "user",
-		"message": map[string]any{"role": "user", "content": prompt},
+		"message": map[string]any{"role": "user", "content": p.claudeContent()},
 	}
 	if err := s.writeJSON(msg); err != nil {
 		s.endTurn()
@@ -821,13 +821,13 @@ func verdictLine(d permDecision) string {
 
 // ------------------------------ Runner --------------------------------
 
-func (b *Bot) runClaude(ctx context.Context, chatID int64, sess *Session, prompt string) {
+func (b *Bot) runClaude(ctx context.Context, chatID int64, sess *Session, p prompt) {
 	cs, err := b.claudeFor(chatID, sess)
 	if err != nil {
 		b.send(chatID, "⚠️ claude: "+err.Error()+"\n(kiểm tra: đã cài `claude` và đăng nhập cho user này chưa?)", false)
 		return
 	}
-	err = cs.sendPrompt(ctx, prompt)
+	err = cs.sendPrompt(ctx, p)
 	switch {
 	case err == nil:
 	case ctx.Err() == context.DeadlineExceeded:

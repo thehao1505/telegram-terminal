@@ -36,13 +36,32 @@ type tgMock struct {
 	edits   []string
 	answers []string
 	askCh   chan string // callback_data của nút đầu tiên
+
+	fileData []byte   // nội dung mọi file mà getFile/download trả về
+	fileIDs  []string // các file_id mà bot đã hỏi getFile
 }
 
 func newTGMock() *tgMock {
 	m := &tgMock{askCh: make(chan string, 4)}
 	var nextID int64 = 100
 	m.srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Tải file đính kèm: .../file/<file_path>
+		if strings.HasPrefix(r.URL.Path, "/file/") {
+			m.mu.Lock()
+			data := m.fileData
+			m.mu.Unlock()
+			w.Write(data)
+			return
+		}
 		r.ParseForm()
+		if path.Base(r.URL.Path) == "getFile" {
+			id := r.FormValue("file_id")
+			m.mu.Lock()
+			m.fileIDs = append(m.fileIDs, id)
+			m.mu.Unlock()
+			fmt.Fprintf(w, `{"ok":true,"result":{"file_path":"photos/%s.bin"}}`, id)
+			return
+		}
 		text := r.FormValue("text")
 		m.mu.Lock()
 		switch path.Base(r.URL.Path) {
@@ -83,10 +102,12 @@ func (m *tgMock) bot(cfg Config) *Bot {
 	return &Bot{
 		cfg:        cfg,
 		apiBase:    m.srv.URL + "/",
+		fileBase:   m.srv.URL + "/file/",
 		pollClient: m.srv.Client(),
 		sendClient: m.srv.Client(),
 		sessions:   map[int64]*Session{},
 		allowed:    map[int64]bool{7: true},
+		albums:     map[string]*albumBuf{},
 	}
 }
 
@@ -125,7 +146,7 @@ func TestClaudeAllowAlways(t *testing.T) {
 
 	done := make(chan struct{})
 	go func() {
-		b.runClaude(context.Background(), 1, sess, "chào bạn")
+		b.runClaude(context.Background(), 1, sess, textPrompt("chào bạn"))
 		close(done)
 	}()
 
@@ -217,7 +238,7 @@ func TestClaudeAskTimeout(t *testing.T) {
 
 	done := make(chan struct{})
 	go func() {
-		b.runClaude(context.Background(), 1, sess, "chào bạn")
+		b.runClaude(context.Background(), 1, sess, textPrompt("chào bạn"))
 		close(done)
 	}()
 	select {
@@ -253,7 +274,7 @@ func TestClaudeCancel(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	go func() {
-		b.runClaude(ctx, 1, sess, "chào bạn")
+		b.runClaude(ctx, 1, sess, textPrompt("chào bạn"))
 		close(done)
 	}()
 	select {
@@ -290,7 +311,7 @@ func TestRealClaudeEndToEnd(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		b.runClaude(context.Background(), 1, sess,
-			"Dùng tool Write tạo file hello.txt với nội dung 'xin chao'. Trả lời thật ngắn.")
+			textPrompt("Dùng tool Write tạo file hello.txt với nội dung 'xin chao'. Trả lời thật ngắn."))
 		close(done)
 	}()
 

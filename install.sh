@@ -16,22 +16,64 @@ if [[ $EUID -ne 0 ]]; then
   exit 1
 fi
 
+# host_arch: kiến trúc của máy này, theo cách gọi của Go (GOARCH).
+host_arch() {
+  case "$(uname -m)" in
+    x86_64|amd64)   echo amd64 ;;
+    aarch64|arm64)  echo arm64 ;;
+    armv7l|armv6l)  echo arm ;;
+    riscv64)        echo riscv64 ;;
+    *)              echo "?" ;;
+  esac
+}
+
+# elf_arch <file>: đọc e_machine trong ELF header (offset 18, 2 byte little-endian).
+# Dùng để chặn trường hợp copy binary sai kiến trúc -> systemd báo
+# "Exec format error" (status 203/EXEC) và restart vô hạn.
+elf_arch() {
+  local m
+  m=$(od -An -tx1 -j18 -N2 "$1" 2>/dev/null | tr -d ' \n')
+  case "$m" in
+    3e00) echo amd64 ;;
+    b700) echo arm64 ;;
+    2800) echo arm ;;
+    f300) echo riscv64 ;;
+    *)    echo "?" ;;
+  esac
+}
+
+ARCH="$(host_arch)"
+echo "==> Kiến trúc máy này: $(uname -m) ($ARCH)"
+
 echo "==> User chạy bot: $RUN_USER"
 
-# 1) Binary: dùng bản đã build sẵn nếu có, không thì build bằng go.
-if [[ -x "$BIN_SRC_DIR/telegram-terminal" ]]; then
-  echo "==> Dùng binary có sẵn: $BIN_SRC_DIR/telegram-terminal"
-  install -m 0755 "$BIN_SRC_DIR/telegram-terminal" "$BIN_DST"
+# 1) Binary: dùng bản build sẵn nếu ĐÚNG kiến trúc, không thì build bằng go.
+SRC_BIN="$BIN_SRC_DIR/telegram-terminal"
+SRC_ARCH="?"
+[[ -f "$SRC_BIN" ]] && SRC_ARCH="$(elf_arch "$SRC_BIN")"
+
+if [[ -f "$SRC_BIN" && "$SRC_ARCH" == "$ARCH" ]]; then
+  echo "==> Dùng binary có sẵn ($SRC_ARCH): $SRC_BIN"
+  install -m 0755 "$SRC_BIN" "$BIN_DST"
 elif command -v go >/dev/null 2>&1; then
-  echo "==> Build bằng Go…"
-  ( cd "$BIN_SRC_DIR" && CGO_ENABLED=0 go build -ldflags "-s -w" -o telegram-terminal . )
-  install -m 0755 "$BIN_SRC_DIR/telegram-terminal" "$BIN_DST"
+  if [[ -f "$SRC_BIN" ]]; then
+    echo "==> Bỏ qua binary có sẵn: nó là $SRC_ARCH, máy này cần $ARCH"
+  fi
+  echo "==> Build bằng Go cho $ARCH…"
+  ( cd "$BIN_SRC_DIR" && CGO_ENABLED=0 GOARCH="$ARCH" go build -trimpath -ldflags "-s -w" -o "telegram-terminal.$ARCH" . )
+  install -m 0755 "$BIN_SRC_DIR/telegram-terminal.$ARCH" "$BIN_DST"
 else
-  echo "Không tìm thấy binary 'telegram-terminal' và cũng chưa cài Go." >&2
-  echo "Hãy build ở máy khác rồi đặt file 'telegram-terminal' cạnh install.sh." >&2
+  if [[ -f "$SRC_BIN" ]]; then
+    echo "Binary có sẵn là $SRC_ARCH nhưng máy này là $ARCH, và máy chưa cài Go." >&2
+    echo "Build ở máy khác rồi copy sang:" >&2
+    echo "  CGO_ENABLED=0 GOOS=linux GOARCH=$ARCH go build -trimpath -ldflags \"-s -w\" -o telegram-terminal ." >&2
+  else
+    echo "Không tìm thấy binary 'telegram-terminal' và cũng chưa cài Go." >&2
+    echo "Hãy build ở máy khác rồi đặt file 'telegram-terminal' cạnh install.sh." >&2
+  fi
   exit 1
 fi
-echo "   -> $BIN_DST"
+echo "   -> $BIN_DST ($(elf_arch "$BIN_DST"))"
 
 # 2) Config (không ghi đè nếu đã có).
 mkdir -p "$CFG_DIR"

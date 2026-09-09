@@ -6,6 +6,8 @@ Biến một bot Telegram thành "terminal" cho máy Ubuntu của bạn:
 - Gửi prompt → chạy **Claude Code** ngay trên máy đó, câu trả lời **stream theo
   thời gian thực**, và khi Claude cần chạy tool thì **xin phép bằng nút bấm**
   trong Telegram.
+- Gửi **ảnh** kèm caption → ảnh đi thẳng vào lượt Claude (screenshot lỗi, ảnh
+  thiết kế, biểu đồ…).
 
 Viết bằng Go thuần (chỉ standard library) → build ra **1 binary tĩnh**, copy sang
 máy nào cũng chạy, không cần cài runtime.
@@ -22,6 +24,7 @@ máy nào cũng chạy, không cần cài runtime.
   - [Hai chế độ](#hai-chế-độ-shell-và-claude)
   - [Chế độ shell](#chế-độ-shell)
   - [Chế độ Claude](#chế-độ-claude)
+  - [Gửi ảnh & file](#gửi-ảnh--file)
   - [Quyền: `/perm`](#quyền-perm)
   - [Phiên: `/session`](#phiên-session)
   - [`/status`](#status--đọc-trạng-thái)
@@ -56,7 +59,21 @@ CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags "-s -w" -o tel
 `-trimpath` để binary không nhúng đường dẫn tuyệt đối của máy build (nếu bạn
 commit binary lên repo công khai).
 
-Máy ARM (VD Raspberry Pi / server ARM): thêm `GOARCH=arm64`.
+Máy ARM (VD Raspberry Pi, AWS Graviton, Oracle Ampere): đổi `GOARCH=arm64`.
+Kiểm tra kiến trúc máy đích bằng `uname -m` (`x86_64` → `amd64`,
+`aarch64` → `arm64`). Build sẵn cả hai:
+
+```bash
+for a in amd64 arm64; do
+  CGO_ENABLED=0 GOOS=linux GOARCH=$a go build -trimpath -ldflags "-s -w" \
+    -o dist/telegram-terminal-linux-$a .
+done
+```
+
+> Binary **không** chạy chéo kiến trúc. Copy bản `amd64` lên máy ARM sẽ khiến
+> systemd báo `Exec format error` và restart vô hạn. `install.sh` tự đối chiếu
+> kiến trúc của binary với `uname -m`, lệch thì nó build lại (nếu máy có Go)
+> hoặc báo lỗi rõ ràng thay vì cài file không chạy được.
 
 Binary không phụ thuộc gì → chỉ cần `scp telegram-terminal user@may:/tmp/`.
 
@@ -133,11 +150,18 @@ File `/etc/telegram-terminal/config.json`:
 | `claude_args` | Args thêm cho `claude`, VD `["--model","opus"]` | `[]` |
 | `claude_permission_mode` | Chế độ quyền lúc mở phiên: `manual`, `acceptEdits`, `auto`, `dontAsk`, `plan`, `bypassPermissions` | `manual` |
 | `claude_ask_timeout_seconds` | Chờ người dùng bấm nút cho phép bao lâu trước khi **tự động từ chối** | `300` |
+| `image_dir` | Nơi lưu ảnh/file gửi từ Telegram | `<temp>/telegram-terminal` |
+| `image_max_bytes` | Ảnh nhỏ hơn mức này được **nhúng thẳng** vào lượt Claude; lớn hơn thì chỉ đưa đường dẫn | `3670016` (3,5 MB) |
+| `image_keep_hours` | Dọn file đính kèm cũ hơn mức này lúc khởi động; số âm = giữ mãi | `24` |
+| `image_default_prompt` | Prompt dùng khi gửi ảnh mà không có caption | `Xem file đính kèm.` |
 
 Biến môi trường ghi đè config (tiện cho systemd / secret manager):
 `TT_BOT_TOKEN`, `TT_ALLOWED_USER_IDS` (phân tách bằng dấu phẩy), `TT_SHELL`,
 `TT_START_DIR`, `TT_CLAUDE_BIN`, `TT_CLAUDE_ENABLED=1`,
-`TT_CLAUDE_PERMISSION_MODE`.
+`TT_CLAUDE_PERMISSION_MODE`, `TT_IMAGE_DIR`, `TT_IMAGE_MAX_BYTES`.
+
+> `image_max_bytes` mặc định 3,5 MB vì base64 làm dữ liệu nở 4/3 lần, còn API
+> Claude chỉ nhận ảnh tối đa 5 MB sau khi mã hóa.
 
 Ba cấu hình mẫu:
 
@@ -186,7 +210,7 @@ Mỗi chat chỉ chạy **một việc tại một thời điểm**. Gửi tiế
 
 > Nhóm chat: trạng thái tính theo **chat**, không theo người. Cả nhóm dùng chung
 > một thư mục, một phiên Claude — ai trong `allowed_user_ids` cũng gõ được.
-> Bot chỉ đọc tin nhắn **text**; ảnh, file, voice bị bỏ qua.
+> Bot đọc tin nhắn **text** và **ảnh/file đính kèm**; video và voice bị bỏ qua.
 
 ## Chế độ shell
 
@@ -253,6 +277,32 @@ Bạn sẽ thấy 4 loại tin nhắn:
 | `💻 Bash` / `✍️ Write` / `📖 Read` / `🔍 Grep` / `🌐 WebFetch` / `🤖 Task` … | Claude vừa gọi tool đó, kèm phần đáng đọc nhất (lệnh, đường dẫn, pattern…) |
 | `⚠️ tool lỗi:` | Tool chạy nhưng lỗi — tool thành công thì bot im lặng cho khỏi ồn |
 | `— 7.4s · $0.0231` | Kết thúc lượt: thời gian và chi phí |
+
+### Gửi ảnh & file
+
+Đang ở chế độ Claude thì cứ gửi thẳng ảnh vào chat — **caption chính là prompt**:
+
+```text
+bạn:  [ảnh screenshot lỗi]  caption: lỗi này do đâu?
+bot:  ⏳ Cái stack trace trong ảnh cho thấy nil pointer ở sessions.go:132…
+      — 5.1s · $0.0184
+```
+
+- Ảnh được **nhúng trực tiếp** vào lượt (base64) nên Claude thấy ngay, không
+  phải xin quyền tool nào. Bot tự chọn bản kích cỡ nét nhất mà Telegram gửi kèm
+  còn vừa `image_max_bytes`.
+- Gửi **nhiều ảnh một lần** (album) cũng được: bot chờ ~1,4s gom hết rồi chạy
+  **một** lượt duy nhất. Caption của ảnh nào trong album cũng được tính.
+- Không caption → dùng `image_default_prompt`.
+- Ảnh gốc luôn được lưu vào `image_dir/<chat_id>/` và đường dẫn được nêu trong
+  prompt, nên có thể nhắc Claude quay lại đọc/crop ảnh đó ở các lượt sau.
+- **File không phải ảnh** (`.csv`, `.log`, `.pdf`…) và **ảnh quá lớn**: bot lưu
+  ra đĩa rồi đưa đường dẫn để Claude tự đọc bằng tool `Read` — bước này sẽ xin
+  quyền như mọi tool khác.
+- Đang ở **chế độ shell** thì bot chỉ lưu file và trả lời đường dẫn, không gọi
+  Claude. Gõ `/c` rồi gửi lại nếu muốn Claude xem.
+- Video, GIF động, tin nhắn thoại và audio chưa hỗ trợ — bot báo lại chứ không
+  im lặng.
 
 ### Xin quyền bằng nút bấm
 
@@ -407,6 +457,7 @@ Nếu chưa mở phiên nào: `🤖 Phiên: chưa mở · quyền manual sẽ á
 | `/status` | Xem chế độ, thư mục, phiên Claude & quyền |
 | `/reset` | Về thư mục mặc định, chế độ shell, quyền theo config & đóng phiên (không xóa gì trên đĩa) |
 | `/help` | Trợ giúp |
+| *(gửi ảnh/file kèm caption)* | Chế độ Claude: ảnh vào thẳng lượt Claude, caption làm prompt. Chế độ shell: chỉ lưu và báo đường dẫn |
 
 Tên gọi khác, giữ cho quen tay:
 
@@ -480,6 +531,8 @@ tiếp tục phần còn lại giúp tôi
 | Claude không thấy file bạn vừa `cd` tới | Phiên giữ thư mục lúc mở. `/session new` |
 | Nút bấm không phản hồi, hiện "Yêu cầu này không còn chờ trả lời nữa" | Yêu cầu đã hết thời gian, đã bị hủy, hoặc phiên đã đóng |
 | Đổi config mà không thấy khác gì | Chưa `sudo systemctl restart telegram-terminal` |
+| `Failed to execute …: Exec format error`, `status=203/EXEC`, service restart liên tục | Binary sai kiến trúc CPU. So `uname -m` với `file /usr/local/bin/telegram-terminal`, rồi build lại đúng `GOARCH` (xem mục Build) |
+| `status=203/EXEC` nhưng đúng kiến trúc | File bị hỏng/thiếu khi truyền. Đối chiếu `sha256sum` hai đầu |
 
 Xem log:
 
@@ -523,6 +576,9 @@ Vài chi tiết đáng lưu:
 
 - Chữ lấy từ `stream_event` → `content_block_delta` → `text_delta`; tool lấy từ
   event `assistant` (input đầy đủ, không phải ghép JSON dở).
+- Prompt chỉ có chữ thì `content` là string thuần; có ảnh thì `content` là mảng
+  content block — một block `text` rồi lần lượt các block
+  `image{source:{type:"base64",media_type,data}}`.
 - Trả lời `initialize` có `current_permission_mode` (bot lấy làm nguồn tin cậy)
   nhưng **không có** `session_id` — id chỉ về ở `system/init` của lượt đầu tiên.
 - "Cho phép luôn" trả kèm `updatedPermissions` lấy nguyên từ
@@ -530,7 +586,7 @@ Vài chi tiết đáng lưu:
 - Trên dây, chế độ mặc định tên là `default`, còn cờ CLI gọi là `manual` — bot
   quy đổi hai chiều.
 - Các file: `main.go` (Telegram + shell), `claude.go` (phiên Claude, quyền),
-  `sessions.go` (liệt kê/resume phiên).
+  `sessions.go` (liệt kê/resume phiên), `media.go` (tải ảnh/file, gom album).
 
 # Chạy test
 
@@ -538,15 +594,15 @@ Vài chi tiết đáng lưu:
 go test ./...        # dùng một `claude` giả nói đúng giao thức — không tốn API
 ```
 
-Hai test chạy với `claude` thật (có tốn API), bật bằng biến môi trường:
+Các test chạy với `claude` thật (có tốn API), bật bằng biến môi trường:
 
 ```bash
 TT_E2E_CLAUDE=1 go test -run 'TestReal' -v -timeout 15m
 ```
 
 `testdata/fakeclaude/` là bản `claude` giả: bắt tay initialize, stream chữ, gọi
-tool, xin quyền, nhận `set_permission_mode`, ghi lại args & quyết định để test
-đối chiếu.
+tool, xin quyền, nhận `set_permission_mode`, ghi lại args, quyết định và cả
+message nhận được (để test đối chiếu content block ảnh).
 
 # Bảo mật — nên làm
 

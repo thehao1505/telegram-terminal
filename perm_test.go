@@ -156,7 +156,7 @@ func TestRealPermMode(t *testing.T) {
 		t.Errorf("phiên báo %q, muốn acceptEdits", got)
 	}
 	if err := cs.sendPrompt(context.Background(),
-		"Dùng tool Write tạo file p.txt nội dung 'ok'. Trả lời 1 câu."); err != nil {
+		textPrompt("Dùng tool Write tạo file p.txt nội dung 'ok'. Trả lời 1 câu.")); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(filepath.Join(dir, "p.txt")); err != nil {

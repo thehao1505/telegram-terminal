@@ -12,5 +12,10 @@
   "claude_args": [],
 
   "claude_permission_mode": "manual",
-  "claude_ask_timeout_seconds": 300
+  "claude_ask_timeout_seconds": 300,
+
+  "image_dir": "",
+  "image_max_bytes": 3670016,
+  "image_keep_hours": 24,
+  "image_default_prompt": "Xem file đính kèm."
 }

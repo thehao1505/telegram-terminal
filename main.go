@@ -22,6 +22,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -52,6 +53,12 @@ type Config struct {
 	ClaudePermissionMode string `json:"claude_permission_mode"`
 	// Thời gian chờ người dùng bấm nút cho phép (0 = mặc định 300s).
 	ClaudeAskTimeout int `json:"claude_ask_timeout_seconds"`
+
+	// Ảnh/file gửi từ Telegram.
+	ImageDir           string `json:"image_dir"`            // "" = <temp>/telegram-terminal
+	ImageMaxBytes      int    `json:"image_max_bytes"`      // trên mức này chỉ đưa đường dẫn
+	ImageKeepHours     int    `json:"image_keep_hours"`     // dọn file cũ lúc khởi động (mặc định 24, số âm = giữ mãi)
+	ImageDefaultPrompt string `json:"image_default_prompt"` // prompt khi gửi ảnh không caption
 }
 
 func (c *Config) claudePermissionMode() string {
@@ -66,6 +73,39 @@ func (c *Config) claudeAskTimeout() int {
 		return 300
 	}
 	return c.ClaudeAskTimeout
+}
+
+func (c *Config) imageDir() string {
+	if c.ImageDir == "" {
+		return filepath.Join(os.TempDir(), "telegram-terminal")
+	}
+	return c.ImageDir
+}
+
+// imageMaxBytes: ngưỡng nhúng base64. Mặc định 3.5MB vì base64 nở 4/3 lần, còn
+// API Claude chỉ nhận ảnh tối đa 5MB sau khi mã hóa.
+func (c *Config) imageMaxBytes() int {
+	if c.ImageMaxBytes <= 0 {
+		return 3_670_016
+	}
+	return c.ImageMaxBytes
+}
+
+func (c *Config) imageKeepHours() int {
+	if c.ImageKeepHours == 0 {
+		return 24
+	}
+	if c.ImageKeepHours < 0 {
+		return 0 // giữ mãi
+	}
+	return c.ImageKeepHours
+}
+
+func (c *Config) imageDefaultPrompt() string {
+	if strings.TrimSpace(c.ImageDefaultPrompt) == "" {
+		return "Xem file đính kèm."
+	}
+	return c.ImageDefaultPrompt
 }
 
 func (c *Config) applyDefaults() {
@@ -126,6 +166,14 @@ func loadConfig(path string) (Config, error) {
 	if v := os.Getenv("TT_CLAUDE_PERMISSION_MODE"); v != "" {
 		c.ClaudePermissionMode = v
 	}
+	if v := os.Getenv("TT_IMAGE_DIR"); v != "" {
+		c.ImageDir = v
+	}
+	if v := os.Getenv("TT_IMAGE_MAX_BYTES"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			c.ImageMaxBytes = n
+		}
+	}
 	c.applyDefaults()
 	return c, nil
 }
@@ -147,12 +195,16 @@ type Session struct {
 type Bot struct {
 	cfg        Config
 	apiBase    string // tiền tố URL Bot API (test thay bằng server giả)
+	fileBase   string // tiền tố URL tải file đính kèm
 	pollClient *http.Client
 	sendClient *http.Client
 	sessions   map[int64]*Session
 	smu        sync.Mutex
 	allowed    map[int64]bool
 	hostname   string
+
+	amu    sync.Mutex
+	albums map[string]*albumBuf // ảnh cùng album đang chờ gom, theo media_group_id
 }
 
 func newBot(cfg Config) *Bot {
@@ -164,11 +216,13 @@ func newBot(cfg Config) *Bot {
 	return &Bot{
 		cfg:        cfg,
 		apiBase:    "https://api.telegram.org/bot" + cfg.BotToken + "/",
+		fileBase:   "https://api.telegram.org/file/bot" + cfg.BotToken + "/",
 		pollClient: &http.Client{Timeout: 70 * time.Second},
 		sendClient: &http.Client{Timeout: 30 * time.Second},
 		sessions:   map[int64]*Session{},
 		allowed:    allowed,
 		hostname:   host,
+		albums:     map[string]*albumBuf{},
 	}
 }
 
@@ -186,19 +240,49 @@ func (b *Bot) session(chatID int64) *Session {
 // --------------------------- Telegram API -----------------------------
 
 type Update struct {
-	UpdateID int64 `json:"update_id"`
-	Message  *struct {
-		MessageID int64 `json:"message_id"`
-		From      *struct {
-			ID       int64  `json:"id"`
-			Username string `json:"username"`
-		} `json:"from"`
-		Chat *struct {
-			ID int64 `json:"id"`
-		} `json:"chat"`
-		Text string `json:"text"`
-	} `json:"message"`
+	UpdateID      int64          `json:"update_id"`
+	Message       *tgMessage     `json:"message"`
 	CallbackQuery *callbackQuery `json:"callback_query"`
+}
+
+type tgMessage struct {
+	MessageID int64 `json:"message_id"`
+	From      *struct {
+		ID       int64  `json:"id"`
+		Username string `json:"username"`
+	} `json:"from"`
+	Chat *struct {
+		ID int64 `json:"id"`
+	} `json:"chat"`
+	Text string `json:"text"`
+
+	// File đính kèm. Caption là phần chữ đi kèm ảnh/file; MediaGroupID khác
+	// rỗng khi người dùng gửi nhiều ảnh một lần (album).
+	Caption      string        `json:"caption"`
+	MediaGroupID string        `json:"media_group_id"`
+	Photo        []tgPhotoSize `json:"photo"`
+	Document     *tgFile       `json:"document"`
+	Sticker      *tgFile       `json:"sticker"`
+	Video        *tgFile       `json:"video"`
+	Animation    *tgFile       `json:"animation"`
+	Voice        *tgFile       `json:"voice"`
+	Audio        *tgFile       `json:"audio"`
+}
+
+// tgPhotoSize: một trong nhiều bản kích cỡ khác nhau của cùng một ảnh.
+type tgPhotoSize struct {
+	FileID   string `json:"file_id"`
+	Width    int    `json:"width"`
+	Height   int    `json:"height"`
+	FileSize int    `json:"file_size"`
+}
+
+// tgFile: phần chung của document/sticker/video/… — đủ để tải về.
+type tgFile struct {
+	FileID   string `json:"file_id"`
+	FileName string `json:"file_name"`
+	MimeType string `json:"mime_type"`
+	FileSize int    `json:"file_size"`
 }
 
 // callbackQuery: người dùng bấm 1 nút inline (nút cho phép/từ chối của Claude).
@@ -619,6 +703,9 @@ func (b *Bot) handle(u Update) {
 	chatID := msg.Chat.ID
 	text := strings.TrimSpace(msg.Text)
 	if text == "" {
+		text = strings.TrimSpace(msg.Caption) // ảnh/file dùng caption làm prompt
+	}
+	if text == "" && !msg.hasMedia() {
 		return
 	}
 
@@ -634,6 +721,13 @@ func (b *Bot) handle(u Update) {
 	}
 
 	sess := b.session(chatID)
+
+	// Có file đính kèm -> đi đường media (caption làm prompt, không coi là lệnh).
+	if msg.hasMedia() {
+		b.handleMedia(chatID, sess, msg, text)
+		return
+	}
+
 	cmd, arg := splitCmd(text)
 	arg = strings.TrimSpace(arg)
 
@@ -693,7 +787,7 @@ func (b *Bot) handle(u Update) {
 			b.send(chatID, "🤖 Chế độ Claude — gửi prompt bất kỳ.\n/sh để sang shell · /session để xem phiên · /perm để đổi quyền.", false)
 			return
 		}
-		b.execGuarded(chatID, sess, func(ctx context.Context) { b.runClaude(ctx, chatID, sess, arg) })
+		b.execGuarded(chatID, sess, func(ctx context.Context) { b.runClaude(ctx, chatID, sess, textPrompt(arg)) })
 		return
 
 	// Mọi việc về phiên gom về /session (xem sessionCmd).
@@ -722,7 +816,7 @@ func (b *Bot) handle(u Update) {
 	claudeMode := sess.claudeMode
 	sess.mu.Unlock()
 	if claudeMode && b.cfg.ClaudeEnabled {
-		b.execGuarded(chatID, sess, func(ctx context.Context) { b.runClaude(ctx, chatID, sess, text) })
+		b.execGuarded(chatID, sess, func(ctx context.Context) { b.runClaude(ctx, chatID, sess, textPrompt(text)) })
 	} else {
 		b.execGuarded(chatID, sess, func(ctx context.Context) { b.runShell(ctx, chatID, sess, text) })
 	}
@@ -831,6 +925,12 @@ Claude: %s
 /sh &lt;lệnh&gt; — chạy shell; <code>/sh</code> trống = chuyển sang chế độ shell
 /c &lt;prompt&gt; — hỏi Claude; <code>/c</code> trống = chuyển sang chế độ Claude
 /cancel — hủy lệnh / lượt Claude đang chạy
+
+<b>Ảnh &amp; file</b>
+Đang ở chế độ Claude thì gửi thẳng ảnh vào chat — caption chính là prompt (gửi
+nhiều ảnh một lần cũng được, bot gom thành một lượt). Ảnh được nhúng trực tiếp
+vào lượt nên Claude thấy ngay, không cần xin quyền. File không phải ảnh (hoặc
+ảnh quá lớn) thì bot lưu ra đĩa và đưa đường dẫn để Claude tự đọc.
 
 <b>Phiên Claude</b>
 /session — liệt kê phiên đã lưu ở thư mục hiện tại
@@ -963,9 +1063,11 @@ func main() {
 		log.Fatal("bot_token chưa được cấu hình (dùng file config hoặc biến môi trường TT_BOT_TOKEN)")
 	}
 
+	cleanupAttachments(cfg.imageDir(), cfg.imageKeepHours())
+
 	b := newBot(cfg)
-	log.Printf("telegram-terminal khởi động trên host %q — %d user được phép, claude=%v",
-		b.hostname, len(cfg.AllowedUserIDs), cfg.ClaudeEnabled)
+	log.Printf("telegram-terminal khởi động trên host %q — %d user được phép, claude=%v, ảnh lưu ở %s",
+		b.hostname, len(cfg.AllowedUserIDs), cfg.ClaudeEnabled, cfg.imageDir())
 	if len(cfg.AllowedUserIDs) == 0 {
 		log.Println("CẢNH BÁO: allowlist trống — bot sẽ trả về User ID cho bất kỳ ai nhắn, nhưng KHÔNG chạy lệnh cho tới khi bạn thêm ID.")
 	}
