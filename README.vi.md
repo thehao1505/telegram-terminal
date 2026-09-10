@@ -26,6 +26,9 @@ máy nào cũng chạy, không cần cài runtime.
 **Mục lục**
 
 - [Cài đặt](#cài-đặt)
+  - [Cập nhật khi có bản mới](#cập-nhật-khi-có-bản-mới)
+  - [Phát hành một bản mới](#phát-hành-một-bản-mới)
+  - [Nhắc cập nhật](#nhắc-cập-nhật)
 - [Cấu hình](#cấu-hình)
 - [Hướng dẫn sử dụng](#hướng-dẫn-sử-dụng)
   - [Hai chế độ](#hai-chế-độ-shell-và-claude)
@@ -123,12 +126,33 @@ Trong Telegram, nhắn cho bot:
 | `/help` | Bảng lệnh, có dòng `Claude: ✅ enabled` (hoặc `✅ đã bật` nếu đã `/lang vi`) |
 | `whoami` | Tên user đang chạy bot |
 | `/status` | Hostname, chế độ, thư mục, trạng thái phiên Claude |
+| `/version` | Bản đang cài, và có bản mới hơn hay không |
 | `/c chào bạn` | Chữ chảy dần về trong một tin nhắn |
 
 Nếu chế độ Claude báo lỗi, xem
 [Giới hạn & lỗi thường gặp](#giới-hạn--lỗi-thường-gặp).
 
 ## Cập nhật khi có bản mới
+
+Gõ `/version` trong chat để xem máy đang chạy bản nào và có bản mới hơn không.
+Bot cũng tự hỏi GitHub mỗi 24 giờ và nhắn cho mọi người trong
+`allowed_user_ids` **một tin cho mỗi version mới** — xem
+[Nhắc cập nhật](#nhắc-cập-nhật).
+
+**Từ bản phát hành** (không cần Go — đây là đường dành cho người cài từ tarball):
+
+```bash
+curl -fsSLO https://github.com/thehao1505/telegram-terminal/releases/latest/download/tt-amd64.tar.gz
+tar xzf tt-amd64.tar.gz
+sudo ./tt-amd64/install.sh
+```
+
+Máy ARM (`uname -m` ra `aarch64`) thì dùng `tt-arm64.tar.gz`. Chạy lại
+`install.sh` trên máy đã cài thì binary và systemd unit được thay,
+**`/etc/telegram-terminal/config.json` giữ nguyên**, và service đang chạy sẽ
+được restart. Không phải làm gì thêm.
+
+**Từ source** (việc bạn làm ở máy build):
 
 ```bash
 CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o telegram-terminal .
@@ -139,7 +163,58 @@ sudo systemctl restart telegram-terminal
 > `sudo` cần TTY để nhập mật khẩu — **đừng** gửi lệnh `sudo` qua chính con bot
 > (hoặc qua bất kỳ kênh không có terminal), nó sẽ chết ở chỗ hỏi mật khẩu.
 > Kiểm tra đã cài đúng bản chưa:
-> `sha256sum ./telegram-terminal /usr/local/bin/telegram-terminal`.
+> `/usr/local/bin/telegram-terminal -version`.
+
+Binary build kiểu này báo version là `dev`: nó không có số release để đối
+chiếu nên sẽ không bao giờ nhắc cập nhật (`/version` vẫn kiểm tra được bằng
+tay). Chỉ binary do `release.sh` build mới có version thật.
+
+## Phát hành một bản mới
+
+`release.sh` build cả hai kiến trúc, nhúng số version vào binary và gói đúng
+mấy file người dùng tải:
+
+```bash
+./release.sh v0.2.0
+git tag -a v0.2.0 -m v0.2.0 && git push origin v0.2.0
+gh release create v0.2.0 dist/tt-*.tar.gz dist/SHA256SUMS -t v0.2.0 --generate-notes
+```
+
+**Tag trên git phải trùng đúng số version đã nhúng** — đó chính là chuỗi mà mọi
+bot đang chạy đem ra so với chính nó. Tag nào bot không đọc được thành `vX.Y.Z`
+thì bị bỏ qua trong im lặng, và không ai được nhắc.
+
+## Nhắc cập nhật
+
+Mỗi 24 giờ (đổi được, xem `update_check_hours`) bot hỏi `api.github.com` release
+mới nhất của repo. Nếu tag mới hơn version của chính nó, nó nhắn cho từng người
+trong allowlist một tin:
+
+```text
+🆙 telegram-terminal v0.2.0 đã ra — máy này đang chạy v0.1.0
+https://github.com/thehao1505/telegram-terminal/releases/tag/v0.2.0
+
+Cập nhật (config giữ nguyên):
+curl -fsSLO https://github.com/…/releases/latest/download/tt-arm64.tar.gz
+tar xzf tt-arm64.tar.gz
+sudo ./tt-arm64/install.sh
+```
+
+Mấy lệnh trong tin được dựng theo đúng kiến trúc mà bot đang chạy. Vài điểm nên
+biết:
+
+- **Mỗi version chỉ nhắc một lần.** Tag đã nhắc được ghi ở
+  `~/.cache/telegram-terminal/update-notified` (HOME của user chạy bot), nên
+  restart service không nhắc lại cùng một bản.
+- Tin gửi vào **chat riêng** với từng ID trong `allowed_user_ids`. Ai chưa từng
+  nhắn cho bot thì Telegram trả 403, bot ghi log rồi bỏ qua người đó.
+- Bot **không tự cài** gì cả. Nó chạy dưới user thường, mà cài thì cần `sudo` —
+  sudo qua bot sẽ treo ở chỗ hỏi mật khẩu.
+- Lần kiểm tra đầu tiên diễn ra sau khi khởi động ~60 giây, nên service bị
+  restart liên tục cũng không thành một chùm request. Một lần/ngày còn xa mức
+  60 lần/giờ mà GitHub cho phép khi không đăng nhập.
+- Tắt hẳn bằng `"update_check_hours": -1`. `/version` vẫn dùng được.
+- Chỉ có HTTPS đi ra `api.github.com`; không gửi gì về máy của bạn cả.
 
 ---
 
@@ -164,11 +239,14 @@ File `/etc/telegram-terminal/config.json`:
 | `image_keep_hours` | Dọn file đính kèm cũ hơn mức này lúc khởi động; số âm = giữ mãi | `24` |
 | `image_default_prompt` | Prompt dùng khi gửi ảnh mà không có caption | theo ngôn ngữ của chat (`Xem file đính kèm.`) |
 | `language` | Ngôn ngữ mặc định cho mọi chat: `en` hoặc `vi`. Mỗi chat đổi riêng bằng `/lang` | `en` |
+| `update_repo` | Repo GitHub để hỏi bản mới, dạng `owner/name` | `thehao1505/telegram-terminal` |
+| `update_check_hours` | Bao lâu kiểm tra bản mới một lần; **số âm = tắt** | `24` |
 
 Biến môi trường ghi đè config (tiện cho systemd / secret manager):
 `TT_BOT_TOKEN`, `TT_ALLOWED_USER_IDS` (phân tách bằng dấu phẩy), `TT_SHELL`,
 `TT_START_DIR`, `TT_CLAUDE_BIN`, `TT_CLAUDE_ENABLED=1`,
-`TT_CLAUDE_PERMISSION_MODE`, `TT_IMAGE_DIR`, `TT_IMAGE_MAX_BYTES`, `TT_LANG`.
+`TT_CLAUDE_PERMISSION_MODE`, `TT_IMAGE_DIR`, `TT_IMAGE_MAX_BYTES`, `TT_LANG`,
+`TT_UPDATE_REPO`, `TT_UPDATE_CHECK_HOURS`.
 
 > `image_max_bytes` mặc định 3,5 MB vì base64 làm dữ liệu nở 4/3 lần, còn API
 > Claude chỉ nhận ảnh tối đa 5 MB sau khi mã hóa.
@@ -376,6 +454,42 @@ tự động từ chối sau 5 phút
 - Nội dung hiển thị được rút gọn: nội dung file xem trước 400 ký tự, phần chi
   tiết tool tối đa 800 ký tự.
 
+### Claude hỏi lại kèm đáp án gợi sẵn
+
+Claude cũng có thể hỏi ngược **bạn** và gợi sẵn các đáp án (tool
+`AskUserQuestion`). Đây không phải xin quyền nên bot không hiện Cho phép / Từ
+chối, mà dựng mỗi câu hỏi thành một tin nhắn, mỗi đáp án một nút:
+
+```text
+❓ Thư viện nào? · câu 1/2
+Service này nên dùng router HTTP nào?
+
+▫️ 1. stdlib
+chỉ net/http, không thêm phụ thuộc
+▫️ 2. chi
+có sẵn middleware và nhóm route
+
+[▫️ 1. stdlib]
+[▫️ 2. chi]
+```
+
+- **Chọn một** (thường gặp nhất): bấm 1 đáp án là xong câu đó.
+- **Chọn nhiều** (`multiSelect`): bấm để bật/tắt ☑️/⬜, chọn đủ rồi bấm
+  **📨 Gửi đáp án**. Bấm lại đáp án đã chọn thì bỏ chọn.
+- **Nhiều câu hỏi một lúc** (Claude hỏi tối đa 4 câu): mỗi câu một tin nhắn, trả
+  lời theo thứ tự nào cũng được. Nếu mọi câu đều là chọn-một thì trả lời đủ cả
+  bộ là tự gửi; nút **📨 Gửi đáp án** (ở tin nhắn cuối) gửi những gì đã chọn,
+  nên có thể cố ý bỏ trống một câu.
+- **❌ Hủy** là không trả lời câu nào: Claude được báo bộ câu hỏi bị từ chối và
+  tự quyết lấy.
+- Không ai bấm trong `claude_ask_timeout_seconds` (mặc định 5 phút) → giống hệt
+  yêu cầu quyền hết giờ: Claude được báo là không ai trả lời.
+- Gửi xong, các tin nhắn mất nút và giữ lại đáp án đã chọn (`✅ stdlib`). Câu bị
+  bỏ qua hiện `➖ Chưa trả lời.` và Claude coi như câu đó không có đáp án.
+
+Nút bấm không có ô nhập tay ("Other") — nếu không đáp án nào hợp, bấm **❌ Hủy**
+rồi nhắn câu trả lời của bạn như tin nhắn thường.
+
 ### Claude hỏi lại bằng câu hỏi thường
 
 Nếu Claude hỏi "dùng phương án A hay B?" (câu hỏi thường, không phải xin quyền),
@@ -521,6 +635,7 @@ Nếu chưa mở phiên nào: `🤖 Phiên: chưa mở · quyền manual sẽ á
 | `/perm [chế độ]` | Đổi quyền (có nút bấm) |
 | `/lang [mã]` | Đổi ngôn ngữ giao diện: `en`, `vi` (có nút bấm) |
 | `/status` | Xem chế độ, thư mục, phiên Claude & quyền |
+| `/version` | Bản đang chạy, và có bản mới hơn hay không |
 | `/reset` | Về thư mục mặc định, chế độ shell, quyền theo config & đóng phiên (không xóa gì trên đĩa) |
 | `/help` | Trợ giúp |
 
@@ -530,6 +645,7 @@ Tên gọi khác, giữ cho quen tay:
 /shell = /sh          /claude = /c          /stop = /cancel
 /permission = /perm   /language = /lang   /mode, /st, /pwd = /status
 /sessions, /ss, /newchat, /resume, /r = /session
+/ver, /update = /version
 ```
 
 Trong nhóm chat, Telegram tự thêm `@tenbot` vào lệnh (`/status@mybot`) — bot tự
@@ -663,9 +779,16 @@ Vài chi tiết đáng lưu:
   nhưng **không có** `session_id` — id chỉ về ở `system/init` của lượt đầu tiên.
 - "Cho phép luôn" trả kèm `updatedPermissions` lấy nguyên từ
   `permission_suggestions` của chính yêu cầu đó.
+- `AskUserQuestion` cũng đến bằng `can_use_tool` như mọi tool (có thêm cờ
+  `requires_user_interaction`), nhưng câu trả lời không phải cho phép/từ chối:
+  bot trả `allow` kèm `updatedInput` = đúng input của yêu cầu đó cộng thêm
+  `answers` — map "câu hỏi" → "nhãn đáp án đã chọn", chọn nhiều thì nối bằng
+  `", "` (đúng cách CLI tự gộp mảng lựa chọn). Câu chưa trả lời thì không có mặt
+  trong map.
 - Trên dây, chế độ mặc định tên là `default`, còn cờ CLI gọi là `manual` — bot
   quy đổi hai chiều.
 - Các file: `main.go` (Telegram + shell), `claude.go` (phiên Claude, quyền),
+  `askq.go` (câu hỏi trắc nghiệm của Claude),
   `sessions.go` (liệt kê/resume phiên), `media.go` (tải ảnh/file, gom album),
   `i18n.go` (chuỗi giao diện theo ngôn ngữ).
 
@@ -682,8 +805,9 @@ TT_E2E_CLAUDE=1 go test -run 'TestReal' -v -timeout 15m
 ```
 
 `testdata/fakeclaude/` là bản `claude` giả: bắt tay initialize, stream chữ, gọi
-tool, xin quyền, nhận `set_permission_mode`, ghi lại args, quyết định và cả
-message nhận được (để test đối chiếu content block ảnh).
+tool, xin quyền, hỏi trắc nghiệm (`TT_FAKE_ASKQ`), nhận `set_permission_mode`,
+ghi lại args, quyết định và cả message nhận được (để test đối chiếu content
+block ảnh).
 
 # Bảo mật — nên làm
 

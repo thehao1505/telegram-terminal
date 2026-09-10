@@ -27,6 +27,9 @@ binary**, copy it to any machine, no runtime to install.
 **Contents**
 
 - [Install](#install)
+  - [Updating to a new build](#updating-to-a-new-build)
+  - [Cutting a release](#cutting-a-release)
+  - [Update alerts](#update-alerts)
 - [Configuration](#configuration)
 - [User guide](#user-guide)
   - [Two modes](#two-modes-shell-and-claude)
@@ -125,11 +128,33 @@ In Telegram, message the bot:
 | `/help` | The command list, including `Claude: ✅ enabled` |
 | `whoami` | The user the bot runs as |
 | `/status` | Hostname, current mode, directory, Claude session state |
+| `/version` | The installed version, and whether a newer release exists |
 | `/c hello` | Text streaming into a single message |
 
 If Claude mode errors out, see [Limits & troubleshooting](#limits--troubleshooting).
 
 ## Updating to a new build
+
+`/version` in the chat shows what this machine runs and whether a newer release
+exists. The bot also checks GitHub every 24 hours on its own and sends everyone
+in `allowed_user_ids` **one** message per new version — see
+[Update alerts](#update-alerts).
+
+**From a release** (no Go needed — this is the path for everyone who installed
+from a tarball):
+
+```bash
+curl -fsSLO https://github.com/thehao1505/telegram-terminal/releases/latest/download/tt-amd64.tar.gz
+tar xzf tt-amd64.tar.gz
+sudo ./tt-amd64/install.sh
+```
+
+Use `tt-arm64.tar.gz` on ARM (`uname -m` → `aarch64`). Re-running `install.sh`
+on a host that already has the bot replaces the binary and the systemd unit,
+**keeps `/etc/telegram-terminal/config.json` untouched**, and restarts the
+service if it was running. Nothing else to do.
+
+**From source** (what you do on the build machine):
 
 ```bash
 CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o telegram-terminal .
@@ -140,7 +165,58 @@ sudo systemctl restart telegram-terminal
 > `sudo` needs a TTY for the password prompt — **do not** send `sudo` commands
 > through the bot itself (or any channel without a terminal); it dies at the
 > password prompt. Verify which build is installed with
-> `sha256sum ./telegram-terminal /usr/local/bin/telegram-terminal`.
+> `/usr/local/bin/telegram-terminal -version`.
+
+A build made this way reports `dev` as its version: it has no release number to
+compare against, so it never raises an update alert (`/version` still checks by
+hand). Only binaries built by `release.sh` carry a real version.
+
+## Cutting a release
+
+`release.sh` builds both architectures, stamps the version into the binary and
+packs the tarballs users download:
+
+```bash
+./release.sh v0.2.0
+git tag -a v0.2.0 -m v0.2.0 && git push origin v0.2.0
+gh release create v0.2.0 dist/tt-*.tar.gz dist/SHA256SUMS -t v0.2.0 --generate-notes
+```
+
+The **git tag must match the stamped version exactly** — that string is what
+every running bot compares itself against. A tag the bot cannot parse as
+`vX.Y.Z` is ignored silently, so no one gets alerted.
+
+## Update alerts
+
+Every 24 hours (configurable, see `update_check_hours`) the bot asks
+`api.github.com` for the latest release of its repo. If the tag is newer than
+its own version it sends each allowed user one message:
+
+```text
+🆙 telegram-terminal v0.2.0 is out — this machine runs v0.1.0
+https://github.com/thehao1505/telegram-terminal/releases/tag/v0.2.0
+
+Update (your config is kept):
+curl -fsSLO https://github.com/…/releases/latest/download/tt-arm64.tar.gz
+tar xzf tt-arm64.tar.gz
+sudo ./tt-arm64/install.sh
+```
+
+The commands are built for the architecture the bot is actually running on.
+Details worth knowing:
+
+- **One message per version.** The tag is remembered in
+  `~/.cache/telegram-terminal/update-notified` (HOME of the user running the
+  bot), so a service restart does not re-announce the same release.
+- It goes to the **private chat** with each ID in `allowed_user_ids`. Someone
+  who has never messaged the bot gets a 403 from Telegram, logged and skipped.
+- The bot **never installs anything itself**. It runs as an unprivileged user
+  and installing needs `sudo`, which would hang at the password prompt.
+- The first check happens ~60 s after startup, so a restart loop never turns
+  into a burst of GitHub calls. One call a day is far under GitHub's
+  unauthenticated limit of 60/hour.
+- Turn it off with `"update_check_hours": -1`. `/version` still works.
+- Only outbound HTTPS to `api.github.com`; nothing about your machine is sent.
 
 ---
 
@@ -165,11 +241,14 @@ File: `/etc/telegram-terminal/config.json`
 | `image_keep_hours` | Delete stored attachments older than this at startup; negative = keep forever | `24` |
 | `image_default_prompt` | Prompt used when a photo arrives without a caption | the localised default (`Take a look at the attached file.`) |
 | `language` | Default interface language for every chat: `en` or `vi`. Each chat can override it with `/lang` | `en` |
+| `update_repo` | GitHub repo to check for releases, `owner/name` | `thehao1505/telegram-terminal` |
+| `update_check_hours` | How often to check for a new release; **negative = off** | `24` |
 
 Environment variables override the config file (handy for systemd / secret
 managers): `TT_BOT_TOKEN`, `TT_ALLOWED_USER_IDS` (comma-separated), `TT_SHELL`,
 `TT_START_DIR`, `TT_CLAUDE_BIN`, `TT_CLAUDE_ENABLED=1`,
-`TT_CLAUDE_PERMISSION_MODE`, `TT_IMAGE_DIR`, `TT_IMAGE_MAX_BYTES`, `TT_LANG`.
+`TT_CLAUDE_PERMISSION_MODE`, `TT_IMAGE_DIR`, `TT_IMAGE_MAX_BYTES`, `TT_LANG`,
+`TT_UPDATE_REPO`, `TT_UPDATE_CHECK_HOURS`.
 
 > `image_max_bytes` defaults to 3.5 MB because base64 inflates data by 4/3 and
 > the Claude API caps images at 5 MB *after* encoding.
@@ -384,6 +463,47 @@ auto-denied in 5 minutes
 - Displayed content is trimmed: file previews to 400 characters, tool detail to
   800.
 
+### Multiple-choice questions from Claude
+
+Claude can also ask **you** a question and suggest the answers (its
+`AskUserQuestion` tool). That is not a permission request, so the bot does not
+show Allow/Deny — it turns every question into its own message with one button
+per suggested answer:
+
+```text
+❓ Which library? · question 1/2
+Which HTTP router should the service use?
+
+▫️ 1. stdlib
+net/http only, no new dependency
+▫️ 2. chi
+Middleware and route groups out of the box
+
+[▫️ 1. stdlib]
+[▫️ 2. chi]
+```
+
+- **Pick one** (the usual case): tapping an answer settles that question.
+- **Pick several** (`multiSelect`): tapping toggles ☑️/⬜, so tap every answer
+  you want, then tap **📨 Send answers**. Tapping a chosen answer again removes
+  it.
+- **Several questions at once** (Claude may ask up to 4): each one arrives as
+  its own message and they can be answered in any order. When every question is
+  a pick-one, answering them all sends the whole set automatically; the
+  **📨 Send answers** button (on the last message) sends whatever you have
+  picked so far, so you can leave a question unanswered on purpose.
+- **❌ Cancel** answers nothing — Claude is told the questions were declined and
+  carries on with its own judgement.
+- Nobody taps within `claude_ask_timeout_seconds` (default 5 minutes) → the same
+  thing happens as a timed-out permission prompt: Claude is told nobody
+  answered.
+- Once sent, the messages lose their buttons and keep the chosen answer
+  (`✅ stdlib`). A question you skipped shows `➖ Not answered.` and Claude simply
+  sees no answer for it.
+
+Free-text answers ("Other") are not offered on the buttons — if none of the
+suggestions fit, tap **❌ Cancel** and send your answer as a normal message.
+
 ### When Claude asks a plain question
 
 If Claude asks something like "should I use approach A or B?" (an ordinary
@@ -534,6 +654,7 @@ With no session open: `🤖 Session: none open · manual permissions will apply 
 | `/perm [mode]` | Change the permission mode (with buttons) |
 | `/lang [code]` | Change the interface language: `en`, `vi` (with buttons) |
 | `/status` | Show mode, directory, Claude session & permissions |
+| `/version` | The running build, and whether a newer release exists |
 | `/reset` | Back to the default directory, shell mode, config permissions & close the session (deletes nothing on disk) |
 | `/help` | Help |
 
@@ -543,6 +664,7 @@ Aliases, kept for muscle memory:
 /shell = /sh          /claude = /c          /stop = /cancel
 /permission = /perm   /language = /lang   /mode, /st, /pwd = /status
 /sessions, /ss, /newchat, /resume, /r = /session
+/ver, /update = /version
 ```
 
 In group chats Telegram appends `@botname` to commands (`/status@mybot`) — the
@@ -681,11 +803,19 @@ Details worth knowing:
   `system/init` on the first turn.
 - "Always allow" replies with `updatedPermissions` taken verbatim from that
   request's own `permission_suggestions`.
+- `AskUserQuestion` arrives as an ordinary `can_use_tool` request (flagged
+  `requires_user_interaction`), but its answer is not allow/deny: the bot replies
+  `allow` with `updatedInput` = the request's own input plus
+  `answers` — a map of question text → chosen option label, several picks joined
+  with `", "` (exactly how the CLI itself flattens a multi-select answer).
+  Unanswered questions are left out of the map.
 - On the wire the default mode is called `default`, while the CLI flag calls it
   `manual` — the bot converts both ways.
 - Files: `main.go` (Telegram + shell), `claude.go` (Claude session, permissions),
+  `askq.go` (Claude's multiple-choice questions),
   `sessions.go` (list/resume sessions), `media.go` (download attachments, group
-  albums), `i18n.go` (interface strings per language).
+  albums), `i18n.go` (interface strings per language), `update.go` (version and
+  release checks).
 
 # Running the tests
 
@@ -701,9 +831,10 @@ TT_E2E_CLAUDE=1 go test -run 'TestReal' -v -timeout 15m
 ```
 
 `testdata/fakeclaude/` is the stand-in `claude`: it performs the initialize
-handshake, streams text, calls a tool, asks permission, accepts
-`set_permission_mode`, and records the args, decisions and received messages so
-tests can assert on them (including image content blocks).
+handshake, streams text, calls a tool, asks permission, asks multiple-choice
+questions (`TT_FAKE_ASKQ`), accepts `set_permission_mode`, and records the args,
+decisions and received messages so tests can assert on them (including image
+content blocks).
 
 # Security — do this
 
