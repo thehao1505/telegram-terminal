@@ -78,6 +78,7 @@ var langEN = &language{Code: "en", Native: "English", s: map[string]string{
 	"status.session":     "🤖 Session: %s",
 	"status.cwd.drift":   "\n⚠️ The session is in 📁 <code>%s</code> — use /session new to reopen it in the current directory.",
 	"status.no.session":  "🤖 Session: none open · <b>%s</b> permissions will apply when one opens",
+	"status.update":      "🆙 New version: <b>%s</b> — see /version\n",
 	"status.footer":      "\n\n/perm permissions · /session sessions · /session new for a new session",
 	"session.no.id":      "new (no id yet)",
 	"session.permission": "%s permissions",
@@ -113,6 +114,7 @@ oversized images) are saved to disk and Claude reads them with the Read tool.
 /perm [mode] — change permissions: manual, acceptEdits, auto, dontAsk, plan…
 /lang [code] — change the bot's language (%s)
 /status — mode, directory, Claude session &amp; permissions
+/version — the running build, and whether a newer release exists
 /reset — back to the default directory, shell mode, config permissions &amp; close the session
 /help — this help
 
@@ -189,6 +191,16 @@ allow</b> buttons (auto-denied after %d seconds if nobody taps).`,
 	"lang.invalid": "⚠️ unknown language: %s\nAvailable: <code>%s</code>",
 	"lang.changed": "🌐 Language set to <b>%s</b>.",
 
+	// ---- /version ----
+	"ver.line":         "📦 <b>telegram-terminal</b> <code>%s</code> · %s",
+	"ver.newer":        "\n\n🆙 New version: <b>%s</b>\n%s",
+	"ver.uptodate":     "\n\n✅ Up to date (latest release: <b>%s</b>).",
+	"ver.dev":          "\n\nSelf-built binary — no version to compare against.\nLatest release: <b>%s</b>\n%s",
+	"ver.no.release":   "\n\n<i>%s has not published a release yet.</i>",
+	"ver.check.failed": "\n\n⚠️ Could not reach GitHub: %s",
+	"update.alert":     "🆙 <b>telegram-terminal %s</b> is out — this machine runs <b>%s</b>\n%s",
+	"update.howto":     "\n\nUpdate (your config is kept):\n<pre>%s</pre>",
+
 	// ---- /session ----
 	"sess.head":          "📚 Claude sessions in 📁 <code>%s</code>\n\n",
 	"sess.none":          "No saved sessions for this directory.\n",
@@ -249,6 +261,7 @@ var langVI = &language{Code: "vi", Native: "Tiếng Việt", s: map[string]strin
 	"status.session":     "🤖 Phiên: %s",
 	"status.cwd.drift":   "\n⚠️ Phiên đang ở 📁 <code>%s</code> — /session new để mở lại ở thư mục hiện tại.",
 	"status.no.session":  "🤖 Phiên: chưa mở · quyền <b>%s</b> sẽ áp khi mở",
+	"status.update":      "🆙 Có bản mới: <b>%s</b> — xem /version\n",
 	"status.footer":      "\n\n/perm đổi quyền · /session đổi phiên · /session new mở phiên mới",
 	"session.no.id":      "mới (chưa có id)",
 	"session.permission": "quyền %s",
@@ -284,6 +297,7 @@ vào lượt nên Claude thấy ngay, không cần xin quyền. File không ph�
 /perm [chế độ] — đổi quyền: manual, acceptEdits, auto, dontAsk, plan…
 /lang [mã] — đổi ngôn ngữ của bot (%s)
 /status — xem chế độ, thư mục, phiên Claude &amp; quyền
+/version — bản đang chạy, và có bản mới hơn hay không
 /reset — về thư mục mặc định, chế độ shell, quyền theo config &amp; đóng phiên
 /help — trợ giúp
 
@@ -359,6 +373,16 @@ phép luôn</b> (tự động từ chối sau %d giây nếu không ai bấm).`,
 	"lang.hint":    "\nBấm nút hoặc gõ <code>/lang &lt;mã&gt;</code>.",
 	"lang.invalid": "⚠️ không có ngôn ngữ: %s\nĐang hỗ trợ: <code>%s</code>",
 	"lang.changed": "🌐 Đã đổi ngôn ngữ sang <b>%s</b>.",
+
+	// ---- /version ----
+	"ver.line":         "📦 <b>telegram-terminal</b> <code>%s</code> · %s",
+	"ver.newer":        "\n\n🆙 Có bản mới: <b>%s</b>\n%s",
+	"ver.uptodate":     "\n\n✅ Đang chạy bản mới nhất (release: <b>%s</b>).",
+	"ver.dev":          "\n\nBinary tự build — không có số version để đối chiếu.\nRelease mới nhất: <b>%s</b>\n%s",
+	"ver.no.release":   "\n\n<i>%s chưa phát hành bản nào.</i>",
+	"ver.check.failed": "\n\n⚠️ Không gọi được GitHub: %s",
+	"update.alert":     "🆙 <b>telegram-terminal %s</b> đã ra — máy này đang chạy <b>%s</b>\n%s",
+	"update.howto":     "\n\nCập nhật (config giữ nguyên):\n<pre>%s</pre>",
 
 	// ---- /session ----
 	"sess.head":          "📚 Phiên Claude tại 📁 <code>%s</code>\n\n",

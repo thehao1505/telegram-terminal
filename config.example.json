@@ -19,5 +19,8 @@
   "image_keep_hours": 24,
   "image_default_prompt": "",
 
-  "language": "en"
+  "language": "en",
+
+  "update_repo": "",
+  "update_check_hours": 24
 }

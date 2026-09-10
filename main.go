@@ -63,6 +63,10 @@ type Config struct {
 	// Ngôn ngữ giao diện mặc định: "en" (mặc định) hoặc "vi". Mỗi chat đổi
 	// riêng được bằng /lang.
 	Language string `json:"language"`
+
+	// Nhắc khi có bản mới trên GitHub Releases (xem update.go).
+	UpdateRepo       string `json:"update_repo"`        // "" = thehao1505/telegram-terminal
+	UpdateCheckHours int    `json:"update_check_hours"` // 0 = 24h, số âm = tắt
 }
 
 func (c *Config) claudePermissionMode() string {
@@ -179,6 +183,14 @@ func loadConfig(path string) (Config, error) {
 	if v := os.Getenv("TT_LANG"); v != "" {
 		c.Language = v
 	}
+	if v := os.Getenv("TT_UPDATE_REPO"); v != "" {
+		c.UpdateRepo = v
+	}
+	if v := os.Getenv("TT_UPDATE_CHECK_HOURS"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			c.UpdateCheckHours = n
+		}
+	}
 	if v := os.Getenv("TT_IMAGE_DIR"); v != "" {
 		c.ImageDir = v
 	}
@@ -209,6 +221,7 @@ type Bot struct {
 	cfg        Config
 	apiBase    string // tiền tố URL Bot API (test thay bằng server giả)
 	fileBase   string // tiền tố URL tải file đính kèm
+	ghBase     string // tiền tố URL GitHub API (test thay bằng server giả)
 	pollClient *http.Client
 	sendClient *http.Client
 	sessions   map[int64]*Session
@@ -216,6 +229,7 @@ type Bot struct {
 	smu        sync.Mutex
 	allowed    map[int64]bool
 	hostname   string
+	upd        updateState // bản mới nhất biết được (xem update.go)
 
 	amu    sync.Mutex
 	albums map[string]*albumBuf // ảnh cùng album đang chờ gom, theo media_group_id
@@ -231,6 +245,7 @@ func newBot(cfg Config) *Bot {
 		cfg:        cfg,
 		apiBase:    "https://api.telegram.org/bot" + cfg.BotToken + "/",
 		fileBase:   "https://api.telegram.org/file/bot" + cfg.BotToken + "/",
+		ghBase:     defaultGitHubAPI,
 		pollClient: &http.Client{Timeout: 70 * time.Second},
 		sendClient: &http.Client{Timeout: 30 * time.Second},
 		sessions:   map[int64]*Session{},
@@ -839,6 +854,11 @@ func (b *Bot) handle(u Update) {
 		b.sessionCmd(chatID, sess, cmd, arg)
 		return
 
+	// /update là tên gọi quen tay: bot không tự cài, chỉ cho biết bản nào mới.
+	case "/version", "/ver", "/update":
+		b.send(chatID, b.versionText(chatID), true)
+		return
+
 	case "/lang", "/language":
 		if arg == "" {
 			text, kb := b.langStatus(chatID)
@@ -897,6 +917,9 @@ func (b *Bot) statusText(chatID int64, sess *Session) string {
 
 	var sb strings.Builder
 	sb.WriteString(b.t(chatID, "status.head", htmlEscape(b.hostname), m, htmlEscape(cwd)))
+	if rel := b.updateAvailable(); rel != nil {
+		sb.WriteString(b.t(chatID, "status.update", htmlEscape(rel.TagName)))
+	}
 	if !b.cfg.ClaudeEnabled {
 		sb.WriteString(b.t(chatID, "status.claude.off"))
 		return sb.String()
@@ -1014,6 +1037,7 @@ func (b *Bot) applyLang(chatID int64, code string) {
 func (b *Bot) run() {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
+	go b.watchUpdates(ctx)
 	var offset int64
 	for {
 		select {
@@ -1111,7 +1135,14 @@ func splitByCost(s string, max int, cost func(rune) int) []string {
 
 func main() {
 	cfgPath := flag.String("config", "", "path to the JSON config file")
+	showVersion := flag.Bool("version", false, "print the version and exit")
 	flag.Parse()
+
+	// Trước cả việc đọc config: install.sh gọi cái này để in bản vừa cài.
+	if *showVersion {
+		fmt.Println(versionLine())
+		return
+	}
 
 	cfg, err := loadConfig(*cfgPath)
 	if err != nil {
@@ -1124,8 +1155,8 @@ func main() {
 	cleanupAttachments(cfg.imageDir(), cfg.imageKeepHours())
 
 	b := newBot(cfg)
-	log.Printf("telegram-terminal started on host %q — %d allowed user(s), claude=%v, lang=%s, attachments in %s",
-		b.hostname, len(cfg.AllowedUserIDs), cfg.ClaudeEnabled, cfg.language().Code, cfg.imageDir())
+	log.Printf("%s started on host %q — %d allowed user(s), claude=%v, lang=%s, attachments in %s",
+		versionLine(), b.hostname, len(cfg.AllowedUserIDs), cfg.ClaudeEnabled, cfg.language().Code, cfg.imageDir())
 	if len(cfg.AllowedUserIDs) == 0 {
 		log.Println("WARNING: the allowlist is empty — the bot replies with the sender's User ID but will NOT run anything until you add an ID.")
 	}

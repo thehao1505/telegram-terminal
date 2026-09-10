@@ -2,6 +2,9 @@
 # Cài telegram-terminal lên một máy Ubuntu.
 # Chạy: sudo ./install.sh [user_chạy_bot]
 # Mặc định user = người gọi sudo (SUDO_USER).
+#
+# Cũng là đường CẬP NHẬT: chạy lại trên máy đã cài thì binary + unit được thay,
+# config giữ nguyên, và service đang chạy sẽ được restart để dùng bản mới.
 set -euo pipefail
 
 RUN_USER="${1:-${SUDO_USER:-$USER}}"
@@ -47,6 +50,17 @@ echo "==> Kiến trúc máy này: $(uname -m) ($ARCH)"
 
 echo "==> User chạy bot: $RUN_USER"
 
+# Đã cài trước đó chưa? Quyết định cuối script là in hướng dẫn lần đầu hay
+# restart service. Đọc TRƯỚC khi thay binary để còn in được bản cũ.
+if systemctl is-active --quiet telegram-terminal; then
+  WAS_ACTIVE=yes
+else
+  WAS_ACTIVE=no
+fi
+if [[ -x "$BIN_DST" ]]; then
+  echo "==> Bản đang cài: $("$BIN_DST" -version 2>/dev/null || echo 'không đọc được')"
+fi
+
 # 1) Binary: dùng bản build sẵn nếu ĐÚNG kiến trúc, không thì build bằng go.
 SRC_BIN="$BIN_SRC_DIR/telegram-terminal"
 SRC_ARCH="?"
@@ -73,7 +87,7 @@ else
   fi
   exit 1
 fi
-echo "   -> $BIN_DST ($(elf_arch "$BIN_DST"))"
+echo "   -> $BIN_DST ($(elf_arch "$BIN_DST")) — $("$BIN_DST" -version 2>/dev/null || echo "?")"
 
 # 2) Config (không ghi đè nếu đã có).
 mkdir -p "$CFG_DIR"
@@ -91,6 +105,17 @@ sed "s/REPLACE_USER/$RUN_USER/g" "$BIN_SRC_DIR/telegram-terminal.service" > "$UN
 echo "==> Đã cài unit: $UNIT_DST"
 
 systemctl daemon-reload
+
+# 4) Service đang chạy = đây là lần cập nhật -> restart để dùng binary mới.
+# (Không restart thì tiến trình cũ vẫn sống với inode cũ và bản mới không có tác dụng.)
+if [[ "$WAS_ACTIVE" == yes ]]; then
+  systemctl restart telegram-terminal
+  echo
+  echo "==> Đã cập nhật và restart service."
+  echo "    journalctl -u telegram-terminal -n 20   # kiểm tra bot đã lên"
+  exit 0
+fi
+
 echo
 echo "Xong. Các bước tiếp theo:"
 echo "  1. sudo nano $CFG_FILE   # điền bot_token và allowed_user_ids"
