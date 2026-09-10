@@ -37,6 +37,8 @@ type tgMock struct {
 	answers []string
 	askCh   chan string // callback_data của nút đầu tiên
 
+	markups []string // reply_markup của mọi sendMessage/editMessageText
+
 	fileData []byte   // nội dung mọi file mà getFile/download trả về
 	fileIDs  []string // các file_id mà bot đã hỏi getFile
 }
@@ -69,6 +71,7 @@ func newTGMock() *tgMock {
 			nextID++
 			m.sent = append(m.sent, text)
 			if mk := r.FormValue("reply_markup"); mk != "" {
+				m.markups = append(m.markups, mk)
 				var kb struct {
 					Rows [][]struct {
 						Data string `json:"callback_data"`
@@ -83,6 +86,9 @@ func newTGMock() *tgMock {
 			return
 		case "editMessageText":
 			m.edits = append(m.edits, text)
+			if mk := r.FormValue("reply_markup"); mk != "" {
+				m.markups = append(m.markups, mk)
+			}
 		case "answerCallbackQuery":
 			m.answers = append(m.answers, text)
 		}
@@ -90,6 +96,13 @@ func newTGMock() *tgMock {
 		fmt.Fprint(w, `{"ok":true,"result":true}`)
 	}))
 	return m
+}
+
+// allMarkups: mọi reply_markup đã gửi (dùng để soi nút bấm).
+func (m *tgMock) allMarkups() []string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return append([]string(nil), m.markups...)
 }
 
 func (m *tgMock) all() (sent, edits, answers []string) {

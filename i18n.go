@@ -136,6 +136,20 @@ allow</b> buttons (auto-denied after %d seconds if nobody taps).`,
 	"note.cancelled":   "cancelled",
 	"note.exited":      "claude exited",
 
+	// ---- Claude hỏi lại (AskUserQuestion) ----
+	"askq.title":      "❓ <b>%s</b>",
+	"askq.title.n":    "❓ <b>%s</b> · question %d/%d",
+	"askq.header":     "Claude asks",
+	"askq.multi.hint": "\n\n<i>Pick one or more, then tap “Send answers”.</i>",
+	"askq.chosen":     "\n\n✅ <b>%s</b>",
+	"askq.unanswered": "\n\n➖ Not answered.",
+	"askq.declined":   "\n\n❌ Not answered — %s.",
+	"askq.pick.first": "Pick at least one answer first.",
+	"askq.sent":       "📨 Answers sent to Claude.",
+	"askq.canceled":   "🚫 Questions cancelled.",
+	"btn.askq.send":   "📨 Send answers",
+	"btn.askq.cancel": "❌ Cancel",
+
 	// ---- lượt Claude ----
 	"claude.start.error":  "⚠️ claude: %s\n(check: is `claude` installed and logged in for this user?)",
 	"claude.timeout":      "⏱️ Claude timed out, cancelled.",
@@ -292,6 +306,20 @@ phép luôn</b> (tự động từ chối sau %d giây nếu không ai bấm).`,
 	"note.timeout":     "hết thời gian chờ",
 	"note.cancelled":   "đã hủy",
 	"note.exited":      "claude đã thoát",
+
+	// ---- Claude hỏi lại (AskUserQuestion) ----
+	"askq.title":      "❓ <b>%s</b>",
+	"askq.title.n":    "❓ <b>%s</b> · câu %d/%d",
+	"askq.header":     "Claude hỏi",
+	"askq.multi.hint": "\n\n<i>Chọn một hoặc nhiều đáp án, xong bấm “Gửi đáp án”.</i>",
+	"askq.chosen":     "\n\n✅ <b>%s</b>",
+	"askq.unanswered": "\n\n➖ Chưa trả lời.",
+	"askq.declined":   "\n\n❌ Chưa trả lời — %s.",
+	"askq.pick.first": "Hãy chọn ít nhất một đáp án đã.",
+	"askq.sent":       "📨 Đã gửi đáp án cho Claude.",
+	"askq.canceled":   "🚫 Đã hủy bộ câu hỏi.",
+	"btn.askq.send":   "📨 Gửi đáp án",
+	"btn.askq.cancel": "❌ Hủy",
 
 	// ---- lượt Claude ----
 	"claude.start.error":  "⚠️ claude: %s\n(kiểm tra: đã cài `claude` và đăng nhập cho user này chưa?)",

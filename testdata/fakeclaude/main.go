@@ -89,6 +89,12 @@ func main() {
 					"delta": map[string]any{"type": "text_delta", "text": t},
 				}})
 			}
+			// TT_FAKE_ASKQ: gọi AskUserQuestion thay vì Bash. "one" = 1 câu
+			// chọn-một; giá trị khác = 2 câu, câu sau cho chọn nhiều.
+			if mode := os.Getenv("TT_FAKE_ASKQ"); mode != "" {
+				askQuestions(mode)
+				continue
+			}
 			// TT_FAKE_NOASK: kết thúc lượt ngay, không gọi tool / không xin quyền.
 			if os.Getenv("TT_FAKE_NOASK") != "" {
 				out(map[string]any{"type": "result", "subtype": "success", "is_error": false,
@@ -118,6 +124,42 @@ func main() {
 				"total_cost_usd": 0.0042 * float64(turns), "result": "xong"})
 		}
 	}
+}
+
+// askQuestions phát 1 lượt AskUserQuestion: tool_use rồi can_use_tool.
+func askQuestions(mode string) {
+	questions := []any{map[string]any{
+		"question":    "Dùng thư viện nào?",
+		"header":      "Thư viện",
+		"multiSelect": false,
+		"options": []any{
+			map[string]any{"label": "stdlib", "description": "không thêm phụ thuộc"},
+			map[string]any{"label": "cobra", "description": "nhiều tính năng hơn"},
+		},
+	}}
+	if mode != "one" {
+		questions = append(questions, map[string]any{
+			"question":    "Bật thêm phần nào?",
+			"header":      "Tính năng",
+			"multiSelect": true,
+			"options": []any{
+				map[string]any{"label": "log", "description": "ghi log ra file"},
+				map[string]any{"label": "metrics", "description": "đếm số liệu"},
+				map[string]any{"label": "tracing", "description": "vết gọi hàm"},
+			},
+		})
+	}
+	input := map[string]any{"questions": questions}
+	out(map[string]any{"type": "assistant", "message": map[string]any{
+		"role": "assistant",
+		"content": []any{map[string]any{"type": "tool_use", "id": "tu_q",
+			"name": "AskUserQuestion", "input": input}},
+	}})
+	out(map[string]any{"type": "control_request", "request_id": "req-q",
+		"request": map[string]any{
+			"subtype": "can_use_tool", "tool_name": "AskUserQuestion",
+			"tool_use_id": "tu_q", "input": input,
+		}})
 }
 
 // flagValue lấy giá trị của 1 cờ trong os.Args.

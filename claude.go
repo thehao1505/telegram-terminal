@@ -115,6 +115,10 @@ type permDecision struct {
 	always   bool   // cho phép luôn cho phiên này (updatedPermissions)
 	note     string
 	canceled bool // claude đã rút lại yêu cầu
+
+	// answers: đáp án cho tool AskUserQuestion (map câu hỏi -> nhãn đã chọn).
+	// Chỉ có ở đường đi của askq.go.
+	answers map[string]string
 }
 
 type pendingAsk struct {
@@ -135,6 +139,8 @@ type claudeSession struct {
 
 	mu       sync.Mutex
 	pending  map[string]*pendingAsk    // yêu cầu quyền đang chờ người bấm nút
+	asks     map[string]*questionAsk   // bộ câu hỏi AskUserQuestion đang chờ
+	askSeq   int                       // đánh số bộ câu hỏi cho callback_data
 	ctl      map[string]chan ctlResult // control_request của bot đang chờ trả lời
 	turn     chan struct{}             // đóng khi lượt hiện tại kết thúc
 	sessID   string
@@ -199,6 +205,7 @@ func (b *Bot) startClaude(chatID int64, cwd, resumeID, mode string) (*claudeSess
 	s := &claudeSession{
 		b: b, chatID: chatID, cwd: cwd, cmd: cmd, stdin: stdin, stderr: tail,
 		pending:  map[string]*pendingAsk{},
+		asks:     map[string]*questionAsk{},
 		ctl:      map[string]chan ctlResult{},
 		exited:   make(chan struct{}),
 		permMode: normPermMode(mode),
@@ -730,6 +737,15 @@ func (s *claudeSession) handleAsk(reqID string, raw json.RawMessage) {
 	s.pending[reqID] = ask
 	s.mu.Unlock()
 
+	// AskUserQuestion không phải xin quyền mà là Claude hỏi người dùng: trả lời
+	// bằng nút chọn đáp án chứ không phải Cho phép / Từ chối.
+	if req.ToolName == askQuestionTool {
+		if qs, input, ok := parseAskQuestions(req.Input); ok {
+			s.askQuestions(reqID, ask, qs, input)
+			return
+		}
+	}
+
 	name := req.ToolName
 	if name == "" {
 		name = req.DisplayName
@@ -965,6 +981,8 @@ func toolEmoji(name string) string {
 		return "🤖"
 	case "TodoWrite":
 		return "📝"
+	case askQuestionTool:
+		return "❓"
 	default:
 		return "🔧"
 	}
@@ -1024,6 +1042,15 @@ func toolDetail(name string, input json.RawMessage) string {
 		return get("query")
 	case "Task":
 		return join(get("subagent_type"), get("description"))
+	case askQuestionTool:
+		// Nội dung đầy đủ nằm ở các tin nhắn kèm nút, đây chỉ nhắc lại câu hỏi.
+		if qs, _, ok := parseAskQuestions(input); ok {
+			var lines []string
+			for _, q := range qs {
+				lines = append(lines, q.Question)
+			}
+			return join(lines...)
+		}
 	}
 	b, _ := json.Marshal(m)
 	return string(b)

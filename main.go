@@ -913,8 +913,9 @@ func (b *Bot) statusText(chatID int64, sess *Session) string {
 	return sb.String()
 }
 
-// handleCallback xử lý nút bấm — hiện chỉ có nút trả lời yêu cầu quyền của Claude
-// (callback_data: "ca|<a|A|d>|<request_id>").
+// handleCallback xử lý nút bấm: trả lời yêu cầu quyền của Claude
+// (callback_data: "ca|<a|A|d>|<request_id>"), chọn đáp án cho câu hỏi của
+// Claude ("q|…", xem askq.go), đổi chế độ quyền ("pm|…") và đổi ngôn ngữ ("lg|…").
 func (b *Bot) handleCallback(q *callbackQuery) {
 	if q.From == nil || q.Message == nil || q.Message.Chat == nil {
 		return
@@ -936,6 +937,11 @@ func (b *Bot) handleCallback(q *callbackQuery) {
 	if len(parts) == 2 && parts[0] == "lg" {
 		b.answerCallback(q.ID, parts[1])
 		b.applyLang(chatID, parts[1])
+		return
+	}
+	// q|<ask>|…: trả lời câu hỏi AskUserQuestion (xem askq.go).
+	if len(parts) >= 3 && parts[0] == "q" {
+		b.handleQuestionCallback(q, chatID, parts[1:])
 		return
 	}
 	if len(parts) != 3 || parts[0] != "ca" {
